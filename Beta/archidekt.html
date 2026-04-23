@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html>
 <head>
@@ -127,6 +126,10 @@
 <div id="downloadArea"></div>
 
 <script>
+// ===== CONFIG: set this to your Vercel function URL =====
+const PROXY_BASE = "https://YOUR-PROJECT.vercel.app/api/archidekt?url=";
+// =======================================================
+
 // ---------- Progress + utils ----------
 
 let totalSteps = 1;
@@ -158,15 +161,22 @@ function safeName(s) {
   return s.toLowerCase().replace(/ /g, "_").replace(/\//g, "_");
 }
 
-async function fetchJson(url, retries = 5) {
+async function fetchJson(url, useProxy = false, retries = 5) {
+  const finalUrl = useProxy ? (PROXY_BASE + encodeURIComponent(url)) : url;
+
   for (let i = 0; i < retries; i++) {
-    const r = await fetch(url);
+    const r = await fetch(finalUrl);
     if (r.status === 429) {
       await new Promise(res => setTimeout(res, 300 + i * 300));
       continue;
     }
     if (!r.ok) return null;
-    return await r.json();
+    const text = await r.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
   }
   return null;
 }
@@ -182,7 +192,7 @@ function colorCodeFromIdentity(colors) {
 async function scryfallCard(name) {
   const url = "https://api.scryfall.com/cards/search?q=" +
     encodeURIComponent(`!"${name}" unique:prints`);
-  const data = await fetchJson(url);
+  const data = await fetchJson(url, false);
   if (!data || !data.data || !data.data.length) return null;
 
   const oracle = data.data.find(c => c.oracle_id);
@@ -206,7 +216,7 @@ function tokensFromAllParts(cardJson) {
 }
 
 async function getTokenVariantsFromUri(uri) {
-  const base = await fetchJson(uri);
+  const base = await fetchJson(uri, false);
   if (!base) return [];
 
   const oracleId = base.oracle_id;
@@ -218,7 +228,7 @@ async function getTokenVariantsFromUri(uri) {
   }
   if (!searchUrl) return [base];
 
-  const data = await fetchJson(searchUrl);
+  const data = await fetchJson(searchUrl, false);
   if (!data || !data.data) return [base];
 
   const variants = data.data.filter(c =>
@@ -257,8 +267,11 @@ scanBtn.addEventListener("click", async () => {
 
   try {
     const deckId = extractDeckId(url);
-    step("Fetching deck from Archidekt export endpoint...");
-    const deck = await fetchJson(`https://archidekt.com/api/decks/${deckId}/export/json/`);
+    step("Fetching deck from Archidekt (via Vercel proxy)...");
+    const deck = await fetchJson(
+      `https://archidekt.com/api/decks/${deckId}/export/json/`,
+      true
+    );
     if (!deck) throw new Error("Failed to fetch deck data.");
 
     deckNameGlobal = safeName(deck.name || "tokens");
