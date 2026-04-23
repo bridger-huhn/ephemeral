@@ -4,6 +4,7 @@
 #include <SD.h>
 #include <Wire.h>
 #include <TAMC_GT911.h>
+#include <math.h>        // NEW: for cos/sin in drawStar
 #include <vector>
 
 #define SD_CS     5
@@ -51,6 +52,23 @@
 #define SB_HINT     tft.color565( 80,  80,  90)
 #define SB_CURSOR   tft.color565(130, 130, 220)
 
+// ─── NEW: Star overlay (bottom-center of card view) ──────────────────────────
+#define STAR_CX     160   // horizontal centre of card
+#define STAR_CY     441   // sits above the "hold: back to search" footer text
+#define STAR_OR      15   // outer radius (points)
+#define STAR_IR       6   // inner radius (notches)
+#define STAR_HIT     22   // half-side of square hit-test zone
+
+// ─── NEW: FAV star (keyboard screen, top-right corner) ───────────────────────
+#define KB_FAV_CX   304   // 8 px from right edge of 320-wide screen
+#define KB_FAV_CY    20   // vertically centred in the ~40px header band
+#define KB_FAV_OR    13
+#define KB_FAV_IR     5
+#define KB_FAV_HIT   18
+
+// ─── NEW: Favorites file ──────────────────────────────────────────────────────
+#define FAVORITES_FILE  "/favorites.txt"
+
 // ─── Objects ─────────────────────────────────────────────────────────────────
 TFT_eSPI   tft = TFT_eSPI();
 PNG        png;
@@ -64,9 +82,10 @@ int    searchTough   = -1;
 String searchColor   = "";
 String searchVersion = "";
 bool   showingCard   = false;
+bool   inFavoritesMode = false;   // NEW: true when matches came from favorites
 
 std::vector<String> matches;
-std::vector<String> matchVersions;  // parallel to matches — stores version string
+std::vector<String> matchVersions;
 int  matchIndex     = 0;
 int  tokenCount     = 1;
 bool showTokenCount = false;
@@ -181,11 +200,168 @@ void drawSearchBar()
   if (cx < 304) tft.drawFastVLine(cx, 40, 20, SB_CURSOR);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// NEW: STAR DRAWING (5-pointed, filled or outline)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Vertices are computed as 10 points alternating between outerR and innerR,
+// starting at the top (−90°) and stepping 36° each time.
+// Filled: fan of triangles from the centre.
+// Outline: polyline through all 10 vertices.
+
+void drawStar(int cx, int cy, int outerR, int innerR, uint16_t color, bool filled)
+{
+  float px[10], py[10];
+  for (int i = 0; i < 10; i++) {
+    float angle = (i * 36.0f - 90.0f) * DEG_TO_RAD;
+    float r     = (i % 2 == 0) ? outerR : innerR;
+    px[i] = cx + r * cosf(angle);
+    py[i] = cy + r * sinf(angle);
+  }
+
+  if (filled) {
+    for (int i = 0; i < 10; i++) {
+      int j = (i + 1) % 10;
+      tft.fillTriangle(cx, cy,
+                       (int)px[i], (int)py[i],
+                       (int)px[j], (int)py[j],
+                       color);
+    }
+  } else {
+    for (int i = 0; i < 10; i++) {
+      int j = (i + 1) % 10;
+      tft.drawLine((int)px[i], (int)py[i],
+                   (int)px[j], (int)py[j],
+                   color);
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NEW: FAVORITES — SD FILE OPERATIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Returns true if `path` is present in /favorites.txt
+bool isFavorite(const String &path)
+{
+  File f = SD.open(FAVORITES_FILE);
+  if (!f) return false;
+  bool found = false;
+  while (f.available()) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (line == path) { found = true; break; }
+  }
+  f.close();
+  return found;
+}
+
+// Adds path if not present; removes it if already present (toggle).
+void toggleFavorite(const String &path)
+{
+  std::vector<String> lines;
+  bool found = false;
+
+  File f = SD.open(FAVORITES_FILE);
+  if (f) {
+    while (f.available()) {
+      String line = f.readStringUntil('\n');
+      line.trim();
+      if (line.length() == 0) continue;
+      if (line == path) { found = true; }   // skip (remove)
+      else              { lines.push_back(line); }
+    }
+    f.close();
+  }
+
+  // Delete and rewrite
+  SD.remove(FAVORITES_FILE);
+  File out = SD.open(FAVORITES_FILE, FILE_WRITE);
+  if (out) {
+    for (auto &l : lines) out.println(l);
+    if (!found) out.println(path);   // add if it was absent
+    out.close();
+  }
+
+  Serial.printf("Favorite %s: %s\n", found ? "removed" : "added", path.c_str());
+}
+
+// Loads every line from /favorites.txt into matches[] (clears existing).
+void loadFavoritesAsMatches()
+{
+  matches.clear();
+  matchVersions.clear();
+  File f = SD.open(FAVORITES_FILE);
+  if (!f) {
+    Serial.println("No favorites.txt found.");
+    return;
+  }
+  while (f.available()) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (line.length() > 0) {
+      matches.push_back(line);
+      matchVersions.push_back("");   // versions not stored in favorites
+    }
+  }
+  f.close();
+  Serial.printf("Favorites loaded: %d entries\n", matches.size());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NEW: HIT-TEST HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Square hit zone around the card-view star button
+bool inStarButton(int x, int y)
+{
+  return abs(x - STAR_CX) <= STAR_HIT && abs(y - STAR_CY) <= STAR_HIT;
+}
+
+// Square hit zone around the keyboard-screen FAV star
+bool inKbFavStar(int x, int y)
+{
+  return abs(x - KB_FAV_CX) <= KB_FAV_HIT && abs(y - KB_FAV_CY) <= KB_FAV_HIT;
+}
+
+// Returns true when /favorites.txt exists and has content
+bool hasFavorites()
+{
+  File f = SD.open(FAVORITES_FILE);
+  if (!f) return false;
+  bool ok = f.size() > 0;
+  f.close();
+  return ok;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MODIFIED: drawKeyboard — adds FAV star in the top-right header area
+// ─────────────────────────────────────────────────────────────────────────────
+
 void drawKeyboard()
 {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(tft.color565(160, 160, 180), TFT_BLACK);
   tft.drawString("Card Search", 10, 8, 4);
+
+  // ── NEW: FAV star ──────────────────────────────────────────────────────────
+  // Filled gold if favorites exist, dim outline if none saved yet.
+  bool favs       = hasFavorites();
+  uint16_t kFavC  = favs ? tft.color565(255, 200, 0)    // gold
+                          : tft.color565( 90,  80, 30);  // dim
+  // Clear area first
+  tft.fillRect(KB_FAV_CX - KB_FAV_OR - 4, KB_FAV_CY - KB_FAV_OR - 4,
+               (KB_FAV_OR + 4) * 2,        (KB_FAV_OR + 4) * 2, TFT_BLACK);
+  drawStar(KB_FAV_CX, KB_FAV_CY, KB_FAV_OR, KB_FAV_IR, kFavC, favs);
+  if (!favs) {
+    // draw outline even when dim so tap target is visible
+    drawStar(KB_FAV_CX, KB_FAV_CY, KB_FAV_OR, KB_FAV_IR, kFavC, false);
+  }
+  // Tiny label beneath the star
+  tft.setTextColor(kFavC, TFT_BLACK);
+  int lw = tft.textWidth("FAV", 1);
+  tft.drawString("FAV", KB_FAV_CX - lw / 2, KB_FAV_CY + KB_FAV_OR + 2, 1);
+  // ── END NEW ───────────────────────────────────────────────────────────────
 
   drawSearchBar();
 
@@ -286,7 +462,6 @@ void buildMatchesFromIndex()
         int c1 = line.indexOf(',');
         if (c1 > 0) {
           matches.push_back(line.substring(0, c1));
-          // Extract version: field after the 5th comma (index c5)
           int cc2 = line.indexOf(',', c1 + 1);
           int cc3 = line.indexOf(',', cc2 + 1);
           int cc4 = line.indexOf(',', cc3 + 1);
@@ -341,57 +516,34 @@ void showImage(String path)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TOKEN COUNTER BADGE  (top-left)
-//
-//  No tokens tapped:
-//    ┌──────────────────┐
-//    │   13   (green)   │   full badge, no orange
-//    └──────────────────┘
-//
-//  Some tokens tapped:
-//    ┌──────────────┬──────┐
-//    │  13  (green) │  ⑤   │  orange digit rotated 90°
-//    └──────────────┴──────┘
-//    ↑              ↑
-//    TC_X      splitX = TC_X + TC_W/2 + 10   (biased right so green has room)
-//
-//  Tap left  half → untap one token
-//  Tap right half → tap   one token
-//  Swipe up/down  → add / remove total tokens
 // ─────────────────────────────────────────────────────────────────────────────
 
 #define TC_X    4
 #define TC_Y    4
-#define TC_W  140   // green section (~85px) + right section (~55px) for rotated Font-6 orange
+#define TC_W  140
 #define TC_H   56
 
-// The divider sits 10px right of centre so the green side gets more pixels.
-// This value is used in both draw and hit-test, so compute it consistently.
 inline int tcSplitX() { return TC_X + TC_W / 2 + 10; }
 
 void drawTokenCount()
 {
   int untappedCount = tokenCount - tappedCount;
 
-  // Resolve colours (macros call tft.color565 each time, so cache them)
   uint16_t bgCol    = tft.color565( 15,  25,  15);
   uint16_t bordCol  = tft.color565(  0, 180,  60);
-  uint16_t untapCol = tft.color565(  0, 220,  80);  // green  — untapped
-  uint16_t tapCol   = tft.color565(230, 120,   0);  // orange — tapped
+  uint16_t untapCol = tft.color565(  0, 220,  80);
+  uint16_t tapCol   = tft.color565(230, 120,   0);
   uint16_t divCol   = tft.color565( 80,  80,  80);
 
-  // ── Badge background & border ─────────────────────────────────────────────
   tft.fillRoundRect(TC_X, TC_Y, TC_W, TC_H, 6, bgCol);
   tft.drawRoundRect(TC_X, TC_Y, TC_W, TC_H, 6, bordCol);
 
   int splitX = tcSplitX();
 
-  // Divider — only drawn when tapped tokens exist
   if (tappedCount > 0) {
     tft.drawFastVLine(splitX, TC_Y + 6, TC_H - 12, divCol);
   }
 
-  // ── Green: untapped count (Font 6) ────────────────────────────────────────
-  // Centred within the left portion; expands to full width when nothing tapped.
   {
     String s     = String(untappedCount);
     int    availW = (tappedCount > 0) ? (splitX - TC_X) : TC_W;
@@ -402,15 +554,11 @@ void drawTokenCount()
     tft.drawString(s, tx, ty, 6);
   }
 
-  // ── Orange: tapped count (Font 4, rotated 90°) — only when tapped > 0 ────
-  // A TFT_eSprite is drawn upright, then pushed onto the screen at 90°.
-  // Font 4 is 26 px tall; when rotated it occupies 26 px horizontally on screen.
   if (tappedCount > 0) {
     String s  = String(tappedCount);
-    int    fw = tft.textWidth(s, 6);  // natural (unrotated) pixel width, Font 6
-    int    fh = 48;                   // Font 6 height in px
+    int    fw = tft.textWidth(s, 6);
+    int    fh = 48;
 
-    // Small padding so the sprite boundary doesn't clip descenders
     int sprW = fw + 4;
     int sprH = fh + 4;
 
@@ -420,20 +568,16 @@ void drawTokenCount()
     spr.setTextColor(tapCol, bgCol);
     spr.drawString(s, 2, 2, 6);
 
-    // Screen target: centre of the right section of the badge
     int rightW = (TC_X + TC_W) - splitX;
     int cx     = splitX + rightW / 2;
     int cy     = TC_Y + TC_H / 2;
 
-    // Pivot on the sprite = its own centre; TFT pivot = where to land it
     spr.setPivot(sprW / 2, sprH / 2);
     tft.setPivot(cx, cy);
-    spr.pushRotated(90);   // 90° clockwise — digit reads bottom-to-top
+    spr.pushRotated(90);
     spr.deleteSprite();
   }
 }
-
-// ─── Badge half hit-test helpers ─────────────────────────────────────────────
 
 bool inTokenBadgeLeft(int x, int y)
 {
@@ -448,7 +592,7 @@ bool inTokenBadgeRight(int x, int y)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// P/T BOX  (bottom-right = increment, bottom-left = decrement)
+// P/T BOX
 // ─────────────────────────────────────────────────────────────────────────────
 
 #define PT_W   68
@@ -474,7 +618,7 @@ bool inPTBox(int x, int y)
   return x >= PT_X && x < PT_X + PT_W && y >= PT_Y && y < PT_Y + PT_H;
 }
 
-#define PT_DEC_X  10   // 10px from left edge, matching the right box's inset
+#define PT_DEC_X  10
 #define PT_DEC_Y  PT_Y
 
 bool inPTDecBox(int x, int y)
@@ -484,33 +628,57 @@ bool inPTDecBox(int x, int y)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OVERLAY
+// MODIFIED: OVERLAY  — now draws the gold star button at bottom-centre
 // ─────────────────────────────────────────────────────────────────────────────
+
+void drawStarOverlay()
+{
+  // Clear a small black circle so the star sits on a dark background
+  // regardless of the card art underneath.
+  tft.fillCircle(STAR_CX, STAR_CY, STAR_OR + 5, TFT_BLACK);
+
+  bool fav         = isFavorite(matches[matchIndex]);
+  uint16_t starCol = tft.color565(255, 200, 0);   // gold
+
+  drawStar(STAR_CX, STAR_CY, STAR_OR, STAR_IR, starCol, fav);
+  if (!fav) {
+    // Outline-only when not yet favorited so the silhouette is still clear
+    drawStar(STAR_CX, STAR_CY, STAR_OR, STAR_IR, starCol, false);
+  }
+}
 
 void drawOverlay()
 {
   if (showTokenCount) drawTokenCount();
 
+  // Match counter (top-right)
   String label = String(matchIndex + 1) + " / " + String(matches.size());
+  // NEW: prefix label for favorites mode so the user knows where they are
+  if (inFavoritesMode) label = "★ " + label;
+
   int lw = tft.textWidth(label, 2) + 8;
   int lx = 320 - lw;
-  tft.fillRect(lx, 0, lw, 32, TFT_BLACK);  // taller to fit two lines
-  tft.setTextColor(TFT_YELLOW);
+  tft.fillRect(lx, 0, lw, 32, TFT_BLACK);
+  tft.setTextColor(inFavoritesMode ? tft.color565(255, 200, 0) : TFT_YELLOW);
   tft.drawString(label, lx + 4, 2, 2);
 
-  // Version on the line below the match counter
+  // Version label
   if (matchIndex < (int)matchVersions.size() && matchVersions[matchIndex].length() > 0) {
     String verLabel = "ver:" + matchVersions[matchIndex];
     int vw = tft.textWidth(verLabel, 1) + 6;
     int vx = 320 - vw;
-    tft.setTextColor(tft.color565(160, 160, 80));  // muted yellow
+    tft.setTextColor(tft.color565(160, 160, 80));
     tft.drawString(verLabel, vx + 3, 18, 1);
   }
 
+  // Navigation arrows
   tft.setTextColor(TFT_DARKGREY);
   if (matchIndex > 0)                        tft.drawString("<", 2,   230, 4);
   if (matchIndex < (int)matches.size() - 1)  tft.drawString(">", 304, 230, 4);
   tft.drawString("hold: back to search", 20, 463, 2);
+
+  // ── NEW: star button ──────────────────────────────────────────────────────
+  drawStarOverlay();
 }
 
 void showCardAt(int index)
@@ -582,15 +750,12 @@ void parseSearch()
     }
   }
 
-  // ── v-prefixed version shorthand, e.g. "v4", "v m21" ────────────────────
-  // Any token (after name) that starts with 'v' or 'V' followed by at least
-  // one alphanumeric character is treated as a version code.
   for (int i = 1; i < (int)parts.size(); i++)
   {
     String p = parts[i];
     if ((p[0] == 'v' || p[0] == 'V') && p.length() >= 2 && isAlphaNumeric(p[1]))
     {
-      searchVersion = p.substring(1);  // strip the leading 'v'
+      searchVersion = p.substring(1);
       parts.erase(parts.begin() + i);
       break;
     }
@@ -616,6 +781,8 @@ void parseSearch()
 
 void startSearch()
 {
+  inFavoritesMode = false;   // NEW: entering a fresh search resets the flag
+
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE);
   tft.drawString("Searching...", 80, 220, 4);
@@ -685,7 +852,7 @@ void setup()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LOOP
+// MODIFIED: LOOP — handles star tap (card view) and FAV star tap (keyboard)
 // ─────────────────────────────────────────────────────────────────────────────
 
 int           touchStartX  = 0;
@@ -736,8 +903,7 @@ void loop()
 
       if (showingCard)
       {
-        // ── Long-press on badge → untap ALL tokens ────────────────────────────
-        // Shorter threshold (350 ms) so it fires before the hold-to-search (600 ms).
+        // ── Long-press on token badge → untap ALL ─────────────────────────────
         bool onBadge = showTokenCount
             && (inTokenBadgeLeft(touchStartX, touchStartY)
              || inTokenBadgeRight(touchStartX, touchStartY));
@@ -750,8 +916,9 @@ void loop()
         // ── Long-press anywhere else → back to search ─────────────────────────
         else if (held >= HOLD_MS)
         {
-          showingCard = false;
-          searchText  = "";
+          showingCard     = false;
+          inFavoritesMode = false;   // NEW: reset mode on exit
+          searchText      = "";
           matches.clear();
           matchVersions.clear();
           drawKeyboard();
@@ -769,12 +936,11 @@ void loop()
           {
             if (dy < 0)
             {
-              tokenCount++;  // new token always enters untapped
+              tokenCount++;
             }
             else if (tokenCount > 1)
             {
               tokenCount--;
-              // Remove from tapped pool first; if none tapped, remove untapped
               if (tappedCount > 0) tappedCount--;
             }
           }
@@ -791,7 +957,6 @@ void loop()
         {
           if (inTokenBadgeRight(touchStartX, touchStartY))
           {
-            // Right half → tap one token (untapped → tapped)
             if (tappedCount < tokenCount)
             {
               tappedCount++;
@@ -800,13 +965,20 @@ void loop()
           }
           else if (inTokenBadgeLeft(touchStartX, touchStartY))
           {
-            // Left half → untap one token (tapped → untapped)
             if (tappedCount > 0)
             {
               tappedCount--;
               drawTokenCount();
             }
           }
+          // ── NEW: star button tap — toggle favorite ─────────────────────────
+          else if (inStarButton(touchStartX, touchStartY))
+          {
+            toggleFavorite(matches[matchIndex]);
+            // Redraw only the star so we don't re-decode the PNG
+            drawStarOverlay();
+          }
+          // ── END NEW ──────────────────────────────────────────────────────────
           else if (inPTBox(touchStartX, touchStartY))
           {
             displayPower++;
@@ -829,9 +1001,38 @@ void loop()
       }
       else
       {
-        // ── Keyboard: un-highlight then fire ─────────────────────────────────
-        if (pressedRow >= 0)
+        // ── Keyboard screen ───────────────────────────────────────────────────
+
+        // ── NEW: FAV star button → load favorites list ─────────────────────
+        if (inKbFavStar(touchStartX, touchStartY))
         {
+          tft.fillScreen(TFT_BLACK);
+          tft.setTextColor(TFT_WHITE);
+          tft.drawString("Loading favorites...", 40, 220, 4);
+
+          loadFavoritesAsMatches();
+
+          if (matches.empty()) {
+            drawKeyboard();
+            tft.setTextColor(tft.color565(255, 200, 0));
+            tft.drawString("No favorites saved yet", 10, 295, 2);
+          } else {
+            inFavoritesMode = true;
+            tokenCount      = 1;
+            tappedCount     = 0;
+            showTokenCount  = false;
+            displayPower    = 1;
+            displayTough    = 1;
+            showCardAt(0);
+          }
+
+          pressedRow = -1;
+          pressedCol = -1;
+        }
+        // ── END NEW ──────────────────────────────────────────────────────────
+        else if (pressedRow >= 0)
+        {
+          // Regular keyboard key: un-highlight then fire
           drawKey(pressedRow, pressedCol, false);
           handleKeyPress(pressedRow, pressedCol);
           pressedRow = -1;
