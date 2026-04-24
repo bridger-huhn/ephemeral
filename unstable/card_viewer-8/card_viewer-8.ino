@@ -59,7 +59,7 @@
 #define KB_FAV_HIT  18
 
 // ─── Favorites menu ───────────────────────────────────────────────────────────
-// File format: one "path,Card Name" line per favourite.
+// File format: one "path,Card Name" line per favorite.
 #define FAVORITES_FILE  "/favorites.txt"
 #define FAV_MENU_Y0   44
 #define FAV_MENU_Y1  456
@@ -229,7 +229,7 @@ int countFavorites()
   return n;
 }
 
-// Toggle favourite. Rewrites the file (user-initiated action, latency OK).
+// Toggle favorite. Rewrites the file (user-initiated action, latency OK).
 // Immediately flips currentCardIsFav — no second SD read needed.
 void toggleFavorite(const String &path, const String &name)
 {
@@ -256,12 +256,12 @@ void toggleFavorite(const String &path, const String &name)
     out.close();
   }
   currentCardIsFav = !found;   // flip cache — star redraws instantly, no SD re-read
-  Serial.printf("Favourite %s: %s\n", found?"removed":"added", path.c_str());
+  Serial.printf("Favorite %s: %s\n", found?"removed":"added", path.c_str());
 }
 
-// Populate matches[] from favourites file for card-browse mode.
+// Populate matches[] from favorites file for card-browse mode.
 // matchVersions[] is repurposed to hold card names in this mode.
-void loadFavouritesAsMatches()
+void loadFavoritesAsMatches()
 {
   matches.clear();
   matchVersions.clear();
@@ -303,68 +303,108 @@ int favMenuRowAt(int x, int y)
 // ─────────────────────────────────────────────────────────────────────────────
 void drawFavMenu()
 {
-  uint16_t gold   = tft.color565(255, 200, 0);
-  uint16_t redX   = tft.color565(200, 50, 50);
+  // ── Palette ───────────────────────────────────────────────────────────────
+  uint16_t hdBg   = tft.color565(12,  15,  25);   // header / footer bg
+  uint16_t rowBg0 = tft.color565(16,  20,  34);   // even row
+  uint16_t rowBg1 = tft.color565(22,  27,  44);   // odd row
+  uint16_t gold   = tft.color565(255, 200,  0);
+  uint16_t goldDm = tft.color565(120,  90,  0);
+  uint16_t divCol = tft.color565( 36,  42,  62);  // row divider
+  uint16_t redX   = tft.color565(210,  55,  55);
+  uint16_t sbBg   = tft.color565( 28,  33,  50);  // scrollbar track
+  uint16_t badge  = tft.color565( 50,  80, 160);  // count badge
 
-  int   maxRows = (FAV_MENU_Y1 - FAV_MENU_Y0) / FAV_ROW_H;
-  float maxPx   = (float)max(0, favMenuTotal - maxRows) * FAV_ROW_H;
+  int   maxRows  = (FAV_MENU_Y1 - FAV_MENU_Y0) / FAV_ROW_H;
+  float maxPx    = (float)max(0, favMenuTotal - maxRows) * FAV_ROW_H;
+  bool  hasScroll = (favMenuTotal > maxRows);
+  int   rowW     = hasScroll ? 314 : 320;   // leave 6px for scrollbar
 
-  // ── Scrollable rows ───────────────────────────────────────────────────────
-  // Each row fills its own background — NO fillScreen, so no black-flash flicker.
+  // ── Rows ──────────────────────────────────────────────────────────────────
   int lastY = FAV_MENU_Y0;
 
   if (favMenuTotal == 0) {
-    tft.fillRect(0, FAV_MENU_Y0, 320, FAV_MENU_Y1 - FAV_MENU_Y0, TFT_BLACK);
-    tft.setTextColor(TFT_DARKGREY);
-    tft.drawString("No favourites saved yet.", 20, 220, 2);
+    tft.fillRect(0, FAV_MENU_Y0, 320, FAV_MENU_Y1 - FAV_MENU_Y0, hdBg);
+    tft.setTextColor(tft.color565(70, 75, 110));
+    int mw = tft.textWidth("No favorites saved yet.", 2);
+    tft.drawString("No favorites saved yet.", (320 - mw) / 2, 218, 2);
+    tft.setTextColor(tft.color565(50, 55, 85));
+    int hw = tft.textWidth("Tap the star on any card to add one", 1);
+    tft.drawString("Tap the star on any card to add one", (320 - hw) / 2, 240, 1);
   } else {
     for (int i = 0; i < (int)favCache.size(); i++) {
       int ry = FAV_MENU_Y0 + i * FAV_ROW_H - (int)favScrollPx;
       if (ry + FAV_ROW_H <= FAV_MENU_Y0) continue;
       if (ry >= FAV_MENU_Y1)             break;
 
-      uint16_t bg = (i % 2 == 0) ? tft.color565(12,12,22) : tft.color565(22,22,38);
-      int clipY = max(ry, FAV_MENU_Y0);
-      int clipH = min(ry + FAV_ROW_H, FAV_MENU_Y1) - clipY;
-      tft.fillRect(0, clipY, 320, clipH, bg);
+      uint16_t bg  = (i % 2 == 0) ? rowBg0 : rowBg1;
+      int clipY    = max(ry, FAV_MENU_Y0);
+      int clipH    = min(ry + FAV_ROW_H, FAV_MENU_Y1) - clipY;
+      tft.fillRect(0, clipY, rowW, clipH, bg);
       lastY = clipY + clipH;
 
-      // Text + X only for fully-visible rows
       if (ry >= FAV_MENU_Y0 && ry + FAV_ROW_H <= FAV_MENU_Y1) {
-        int ty = ry + (FAV_ROW_H - 14) / 2;
-        tft.setTextColor(TFT_WHITE, bg);
-        tft.drawString(favCache[i], 10, ty, 2);
+        // Gold left-accent bar
+        tft.fillRect(0, ry, 4, FAV_ROW_H - 1, gold);
 
-        // Red X button (right edge)
-        int cx = 302, cy = ry + FAV_ROW_H / 2;
-        tft.fillCircle(cx, cy, 12, redX);
-        tft.setTextColor(TFT_WHITE);         // transparent bg so circle shows through
-        tft.drawString("X", cx - 4, cy - 7, 2);
+        // Bottom divider (skip on last entry)
+        tft.drawFastHLine(4, ry + FAV_ROW_H - 1, rowW - 4, divCol);
+
+        // Card name
+        tft.setTextColor(TFT_WHITE, bg);
+        tft.drawString(favCache[i], 14, ry + (FAV_ROW_H - 14) / 2, 2);
+
+        // Red X delete button
+        int cx = 297, cy = ry + FAV_ROW_H / 2;
+        tft.fillCircle(cx, cy, 13, redX);
+        // X arms — two lines through center
+        tft.drawLine(cx-6, cy-6, cx+6, cy+6, TFT_WHITE);
+        tft.drawLine(cx+6, cy-6, cx-6, cy+6, TFT_WHITE);
+        tft.drawLine(cx-5, cy-6, cx+7, cy+6, TFT_WHITE);  // bold
+        tft.drawLine(cx+7, cy-6, cx-5, cy+6, TFT_WHITE);
       }
     }
-    // Fill any gap between last row and footer
+    // Gap below last row
     if (lastY < FAV_MENU_Y1)
-      tft.fillRect(0, lastY, 320, FAV_MENU_Y1 - lastY, TFT_BLACK);
+      tft.fillRect(0, lastY, rowW, FAV_MENU_Y1 - lastY, hdBg);
   }
 
-  // ── Header overdraw (masks row bleed and repaints title) ─────────────────
-  tft.fillRect(0, 0, 320, FAV_MENU_Y0, TFT_BLACK);
-  tft.setTextColor(gold, TFT_BLACK);
-  tft.drawString("Favourites", 10, 6, 4);
-  drawStar(298, 20, KB_FAV_OR, KB_FAV_IR, gold, true);
-  char cnt[20]; sprintf(cnt, "%d saved", favMenuTotal);
-  tft.setTextColor(tft.color565(150, 140, 70), TFT_BLACK);
-  tft.drawString(cnt, 12, 34, 2);
-  tft.drawFastHLine(0, FAV_MENU_Y0-2, 320, tft.color565(80,70,20));
+  // ── Scrollbar ─────────────────────────────────────────────────────────────
+  if (hasScroll) {
+    int sbX = 314, sbW = 6;
+    int sbH = FAV_MENU_Y1 - FAV_MENU_Y0;
+    tft.fillRect(sbX, FAV_MENU_Y0, sbW, sbH, sbBg);
+    int totalH  = favMenuTotal * FAV_ROW_H;
+    int thumbH  = max(24, (int)((float)sbH * sbH / totalH));
+    int thumbY  = FAV_MENU_Y0 + (int)((float)(sbH - thumbH) * favScrollPx / maxPx);
+    tft.fillRoundRect(sbX + 1, thumbY + 1, sbW - 2, thumbH - 2, 2, gold);
+  }
 
-  // ── Footer overdraw ───────────────────────────────────────────────────────
-  tft.fillRect(0, FAV_MENU_Y1, 320, 480 - FAV_MENU_Y1, TFT_BLACK);
-  tft.setTextColor(gold, TFT_BLACK);
-  if (favScrollPx > 0.5f)        tft.drawString("^", 154, FAV_MENU_Y0-16, 2);
-  if (favScrollPx < maxPx-0.5f)  tft.drawString("v", 154, FAV_MENU_Y1+3,  2);
-  tft.drawFastHLine(0, FAV_MENU_Y1, 320, tft.color565(80,70,20));
-  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  tft.drawString(favMenuTotal==0 ? "hold: back" : "swipe: scroll   hold: back", 18, 463, 2);
+  // ── Header ────────────────────────────────────────────────────────────────
+  tft.fillRect(0, 0, 320, FAV_MENU_Y0, hdBg);
+  // Star icon (left)
+  drawStar(17, 21, 11, 4, gold, true);
+  // Title
+  tft.setTextColor(TFT_WHITE, hdBg);
+  tft.drawString("Favorites", 34, 7, 4);
+  // Count badge (top-right)
+  char cnt[16]; sprintf(cnt, "%d", favMenuTotal);
+  int bw = tft.textWidth(cnt, 2) + 12;
+  int bx = 318 - bw, by = 8;
+  tft.fillRoundRect(bx, by, bw, 18, 5, badge);
+  tft.setTextColor(TFT_WHITE, badge);
+  tft.drawString(cnt, bx + 6, by + 2, 2);
+  // Double rule
+  tft.drawFastHLine(0, FAV_MENU_Y0 - 2, 320, gold);
+  tft.drawFastHLine(0, FAV_MENU_Y0 - 1, 320, goldDm);
+
+  // ── Footer ────────────────────────────────────────────────────────────────
+  tft.fillRect(0, FAV_MENU_Y1, 320, 480 - FAV_MENU_Y1, hdBg);
+  tft.drawFastHLine(0, FAV_MENU_Y1, 320, divCol);
+  tft.setTextColor(tft.color565(65, 70, 100), hdBg);
+  const char *hint = (favMenuTotal == 0) ? "hold to go back"
+                                         : "swipe to scroll   |   hold to go back";
+  int hw2 = tft.textWidth(hint, 1);
+  tft.drawString(hint, (320 - hw2) / 2, 465, 1);
 }
 
 void openFavMenu()
@@ -387,7 +427,7 @@ void openFavMenu()
       int comma = line.indexOf(',');
       String path  = (comma > 0) ? line.substring(0, comma) : line;
       String dname = (comma > 0) ? line.substring(comma+1)  : line;
-      while (dname.length() > 1 && tft.textWidth(dname,2) > 258) dname.remove(dname.length()-1);
+      while (dname.length() > 1 && tft.textWidth(dname,2) > 252) dname.remove(dname.length()-1);
       favPaths.push_back(path);
       favCache.push_back(dname);
     }
@@ -397,13 +437,13 @@ void openFavMenu()
   drawFavMenu();
 }
 
-// Tap on a menu row → load all favourites into matches[], start at tapped card.
-void openFavouritesFromMenu(int targetIdx)
+// Tap on a menu row → load all favorites into matches[], start at tapped card.
+void openFavoritesFromMenu(int targetIdx)
 {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE);
   tft.drawString("Loading...", 80, 220, 4);
-  loadFavouritesAsMatches();
+  loadFavoritesAsMatches();
   if (matches.empty()) { openFavMenu(); return; }
   inFavoritesMode = true;
   showFavMenu     = false;
@@ -412,7 +452,7 @@ void openFavouritesFromMenu(int targetIdx)
   showCardAt((targetIdx < (int)matches.size()) ? targetIdx : 0);
 }
 
-// Delete a favourite by its menu index — rewrites SD, updates caches in-place.
+// Delete a favorite by its menu index — rewrites SD, updates caches in-place.
 void deleteFavAt(int idx)
 {
   if (idx < 0 || idx >= (int)favPaths.size()) return;
@@ -447,7 +487,7 @@ void deleteFavAt(int idx)
   if (favScrollPx > maxPx) favScrollPx = maxPx;
 
   drawFavMenu();
-  Serial.printf("Deleted favourite: %s\n", pathToRemove.c_str());
+  Serial.printf("Deleted favorite: %s\n", pathToRemove.c_str());
 }
 
 
@@ -849,7 +889,7 @@ void loop()
         {
           if (inTokenBadgeRight(touchStartX,touchStartY)){if(tappedCount<tokenCount){tappedCount++;drawTokenCount();}}
           else if (inTokenBadgeLeft(touchStartX,touchStartY)){if(tappedCount>0){tappedCount--;drawTokenCount();}}
-          // ── Star tap: toggle favourite, redraw star instantly (no PNG reload) ──
+          // ── Star tap: toggle favorite, redraw star instantly (no PNG reload) ──
           else if (inStarButton(touchStartX,touchStartY))
           {
             // Use the real card name — matchNames[] in search mode,
@@ -903,7 +943,7 @@ void loop()
           int idx=favMenuRowAt(touchStartX,touchStartY);
           if (idx>=0) {
             if (touchStartX >= 282) deleteFavAt(idx);   // red X zone
-            else                    openFavouritesFromMenu(idx);
+            else                    openFavoritesFromMenu(idx);
           }
         }
       }
@@ -929,7 +969,7 @@ void loop()
       }
     }
   }
-  // ── Smooth-scroll momentum for favourites menu ──
+  // ── Smooth-scroll momentum for favorites menu ──
   if (showFavMenu && fabsf(favScrollVel) > 0.3f) {
     int maxRows = (FAV_MENU_Y1 - FAV_MENU_Y0) / FAV_ROW_H;
     float maxPx = (float)max(0, favMenuTotal - maxRows) * FAV_ROW_H;
@@ -939,7 +979,7 @@ void loop()
     drawFavMenu();
   }
 
-  // ── Deferred favourite save ──
+  // ── Deferred favorite save ──
   if (pendingFavSave) {
     pendingFavSave = false;
     toggleFavorite(pendingPath, pendingName);

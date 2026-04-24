@@ -15,6 +15,7 @@ img { width:120px; }
 .controls { margin-bottom:10px; }
 .progress { height:10px; background:#eee; margin-top:10px; }
 .progress-bar { height:10px; background:#4caf50; width:0%; }
+#status { margin-top:5px; font-size:14px; }
 </style>
 </head>
 <body>
@@ -35,6 +36,7 @@ img { width:120px; }
 </div>
 <div id="results"></div>
 <div class="progress"><div id="bar" class="progress-bar"></div></div>
+<div id="status"></div>
 </div>
 
 <div id="sidebar">
@@ -43,11 +45,13 @@ img { width:120px; }
 <button onclick="saveCart()">Save Cart</button>
 <button onclick="loadCart()">Load Cart</button>
 <button onclick="downloadCart()">Download Cart</button>
-<button onclick="downloadAllTokens()">Download ALL (throttled)</button>
+<button onclick="downloadAllTokens()">Download ALL</button>
+<button onclick="cancelDownload()">Cancel</button>
 </div>
 
 <script>
 let cart=[]; let nameCounts={}; let allTokensCache=[]; let lastGrouped=null;
+let cancelFlag=false; let startTime=0;
 const CONCURRENT=5;
 
 function clean(t){return t?t.replace(/[^\w\s-]/g,'').replace(/ /g,'_').toLowerCase():'token'}
@@ -57,32 +61,28 @@ function getImageUrl(card){if(card.image_uris)return card.image_uris.border_crop
 
 async function fetchTokens(q){let url=`https://api.scryfall.com/cards/search?q=${encodeURIComponent(q)}&unique=prints`;let res=[];while(url){const r=await fetch(url);const d=await r.json();res.push(...d.data);url=d.next_page;}return res}
 
-async function searchTokens(){const q=document.getElementById('search').value;const tokens=await fetchTokens(q+' t:token');allTokensCache=tokens;displayGrouped(tokens)}
-async function getAllTokens(){const tokens=await fetchTokens('t:token');allTokensCache=tokens;displayGrouped(tokens)}
+async function searchTokens(){try{
+ const q=document.getElementById('search').value;
+ const tokens=await fetchTokens(q+' t:token');
+ allTokensCache=tokens;
+ displayGrouped(tokens);
+}catch(e){console.error(e); alert('Search failed');}}
 
-function groupByName(tokens){const map={};
- tokens.forEach(c=>{
-   const key=c.name;
-   if(!map[key]) map[key]=[];
-   map[key].push(c);
- });
- return map;
-}
+async function getAllTokens(){try{
+ const tokens=await fetchTokens('t:token');
+ allTokensCache=tokens;
+ displayGrouped(tokens);
+}catch(e){console.error(e); alert('Fetch failed');}}
 
-function displayGrouped(tokens){const grouped=groupByName(tokens);
- lastGrouped=grouped;
+function groupByName(tokens){const map={}; tokens.forEach(c=>{if(!map[c.name]) map[c.name]=[]; map[c.name].push(c)}); return map}
+
+function displayGrouped(tokens){const grouped=groupByName(tokens); lastGrouped=grouped;
  const f=document.getElementById('colorFilter').value;
- const container=document.getElementById('results');
- container.innerHTML='';
-
+ const container=document.getElementById('results'); container.innerHTML='';
  Object.entries(grouped).forEach(([name, variants])=>{
-   const card=variants[0];
-   if(f && colorCode(card.colors)!==f) return;
-   const url=getImageUrl(card);
-   if(!url) return;
-
-   const d=document.createElement('div');
-   d.className='token';
+   const card=variants[0]; if(f && colorCode(card.colors)!==f) return;
+   const url=getImageUrl(card); if(!url) return;
+   const d=document.createElement('div'); d.className='token';
    d.innerHTML=`<img src="${url}"><div>${name}</div>`;
    d.onclick=()=>showVariants(name);
    container.appendChild(d);
@@ -91,13 +91,10 @@ function displayGrouped(tokens){const grouped=groupByName(tokens);
 
 function showVariants(name){const variants=lastGrouped[name]||[];
  const container=document.getElementById('results');
- container.innerHTML=`<button onclick="goBack()">⬅ Back</button><h2>${name} variants (${variants.length})</h2>`;
-
+ container.innerHTML=`<button onclick="goBack()">⬅ Back</button><h2>${name} (${variants.length})</h2>`;
  variants.forEach(card=>{
-   const url=getImageUrl(card);
-   if(!url) return;
-   const d=document.createElement('div');
-   d.className='token';
+   const url=getImageUrl(card); if(!url) return;
+   const d=document.createElement('div'); d.className='token';
    d.innerHTML=`<img src="${url}"><div>${card.set} #${card.collector_number}</div>`;
    d.onclick=()=>addToCart(card);
    container.appendChild(d);
@@ -112,78 +109,64 @@ function renderCart(){const el=document.getElementById('cart');el.innerHTML='';c
 function saveCart(){localStorage.setItem('cart',JSON.stringify(cart))}
 function loadCart(){cart=JSON.parse(localStorage.getItem('cart')||'[]');renderCart()}
 
+function cancelDownload(){cancelFlag=true; document.getElementById('status').innerText='Cancelled';}
+
 async function processCards(cards){
-  if(!cards || cards.length===0){ alert('No tokens to download'); return; }
+ if(!cards.length){ alert('No tokens'); return; }
+ cancelFlag=false; startTime=Date.now();
+ const zip=new JSZip(); let index=[]; let done=0;
 
-  const zip=new JSZip(); let index=[]; let done=0;
-
-  async function worker(queue){
-    while(queue.length){
-      const card=queue.shift();
-      try{
-        await handle(card);
-      }catch(e){ console.error('error processing', card.name, e); }
-      done++;
-      updateBar(done/cards.length);
-    }
+ async function worker(queue){
+  while(queue.length && !cancelFlag){
+    const card=queue.shift();
+    try{ await handle(card); }catch(e){ console.error(e); }
+    done++; updateStatus(done,cards.length);
   }
+ }
 
-  async function handle(card){
-    const url=getImageUrl(card);
-    if(!url) return;
+ async function handle(card){
+  const url=getImageUrl(card); if(!url) return;
+  const res=await fetch(url); const blob=await res.blob();
+  const img=await createImageBitmap(blob);
+  const canvas=document.createElement('canvas'); canvas.width=320; canvas.height=480;
+  canvas.getContext('2d').drawImage(img,0,0,320,480);
 
-    const res=await fetch(url);
-    const blob=await res.blob();
+  const base=buildBaseName(card);
+  nameCounts[base]=(nameCounts[base]||0)+1;
+  const filename=`${base}_${nameCounts[base]}.png`;
 
-    const img=await createImageBitmap(blob);
-    const canvas=document.createElement('canvas');
-    canvas.width=320;
-    canvas.height=480;
+  const fileBlob=await new Promise(r=>canvas.toBlob(r,'image/png'));
+  if(fileBlob) zip.file(filename,fileBlob);
 
-    const ctx=canvas.getContext('2d');
-    ctx.drawImage(img,0,0,320,480);
+  const parts=filename.replace('.png','').split('_');
+  const version=parts.pop(); const color=parts.pop();
+  let power='token',tough='token',name;
+  if(parts[parts.length-1]==='token') name=parts.slice(0,-1).join('_');
+  else{ tough=parts.pop(); power=parts.pop(); name=parts.join('_'); }
+  index.push(`${filename},${name},${power},${tough},${color},${version}`);
+ }
 
-    const base=buildBaseName(card);
-    nameCounts[base]=(nameCounts[base]||0)+1;
-    const filename=`${base}_${nameCounts[base]}.png`;
+ const queue=[...cards];
+ const workers=[];
+ for(let i=0;i<CONCURRENT;i++) workers.push(worker(queue));
+ await Promise.all(workers);
 
-    const fileBlob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
-    if(!fileBlob){ console.error('toBlob failed'); return; }
+ if(cancelFlag) return;
 
-    zip.file(filename,fileBlob);
-
-    const parts=filename.replace('.png','').split('_');
-    const version=parts.pop();
-    const color=parts.pop();
-
-    let power='token',tough='token',name;
-    if(parts[parts.length-1]==='token'){
-      name=parts.slice(0,-1).join('_');
-    }else{
-      tough=parts.pop();
-      power=parts.pop();
-      name=parts.join('_');
-    }
-
-    index.push(`${filename},${name},${power},${tough},${color},${version}`);
-  }
-
-  const queue=[...cards];
-  const workers=[];
-  for(let i=0;i<CONCURRENT;i++) workers.push(worker(queue));
-
-  await Promise.all(workers);
-
-  zip.file('index.csv',index.join('
-'));
-
-  const content=await zip.generateAsync({type:'blob'});
-
-  saveAs(content,'tokens.zip');
+ zip.file('index.csv',index.join('\n'));
+ const content=await zip.generateAsync({type:'blob'});
+ saveAs(content,'tokens.zip');
+ document.getElementById('status').innerText='Done';
 }
 
-
-function updateBar(p){document.getElementById('bar').style.width=(p*100)+'%'}
+function updateStatus(done,total){
+ const pct=Math.floor((done/total)*100);
+ document.getElementById('bar').style.width=pct+'%';
+ const elapsed=(Date.now()-startTime)/1000;
+ const rate=done/elapsed;
+ const remaining=Math.round((total-done)/rate);
+ document.getElementById('status').innerText=`${done}/${total} (${pct}%) - ETA ${remaining}s`;
+}
 
 function downloadCart(){processCards(cart)}
 function downloadAllTokens(){processCards(allTokensCache)}
