@@ -116,29 +116,19 @@ async function processCards(cards){
  cancelFlag=false; startTime=Date.now();
  const zip=new JSZip(); let index=[]; let done=0;
 
- async function worker(queue){
-  while(queue.length && !cancelFlag){
-    const card=queue.shift();
-    try{ await handle(card); }catch(e){ console.error(e); }
-    done++; updateStatus(done,cards.length);
-  }
- }
-
  async function handle(card){
-  const url=getImageUrl(card);
-  if(!url){ console.warn('no image url', card.name); return; }
-
   try{
+    const url=getImageUrl(card);
+    if(!url) return;
+
     const res=await fetch(url);
-    if(!res.ok){ console.error('fetch failed', url); return; }
+    if(!res.ok) return;
 
     const blob=await res.blob();
-
     const img=await createImageBitmap(blob);
-    const canvas=document.createElement('canvas');
-    canvas.width=320;
-    canvas.height=480;
 
+    const canvas=document.createElement('canvas');
+    canvas.width=320; canvas.height=480;
     const ctx=canvas.getContext('2d');
     ctx.drawImage(img,0,0,320,480);
 
@@ -146,25 +136,18 @@ async function processCards(cards){
     nameCounts[base]=(nameCounts[base]||0)+1;
     const filename=`${base}_${nameCounts[base]}.png`;
 
-    const fileBlob=await new Promise((resolve,reject)=>{
-      canvas.toBlob(b=>{
-        if(b) resolve(b);
-        else reject('toBlob failed');
-      },'image/png');
-    }).catch(e=>{ console.error(e); return null; });
-
+    const fileBlob=await new Promise(r=>canvas.toBlob(r,'image/png'));
     if(!fileBlob) return;
 
     zip.file(filename,fileBlob);
 
     const parts=filename.replace('.png','').split('_');
-    const version=parts.pop();
-    const color=parts.pop();
-
+    const version=parts.pop(); const color=parts.pop();
     let power='token',tough='token',name;
+
     if(parts[parts.length-1]==='token'){
       name=parts.slice(0,-1).join('_');
-    }else{
+    } else {
       tough=parts.pop();
       power=parts.pop();
       name=parts.join('_');
@@ -172,10 +155,15 @@ async function processCards(cards){
 
     index.push(`${filename},${name},${power},${tough},${color},${version}`);
 
-  }catch(e){
-    console.error('handle failed', card.name, e);
+  }catch(e){ console.error('handle failed', e); }
+ }
+
+ async function worker(queue){
+  while(queue.length && !cancelFlag){
+    const card=queue.shift();
+    await handle(card);
+    done++; updateStatus(done,cards.length);
   }
-}(`${filename},${name},${power},${tough},${color},${version}`);
  }
 
  const queue=[...cards];
@@ -185,7 +173,8 @@ async function processCards(cards){
 
  if(cancelFlag) return;
 
- zip.file('index.csv',index.join('\n'));
+ zip.file('index.csv',index.join('
+'));
  const content=await zip.generateAsync({type:'blob'});
  saveAs(content,'tokens.zip');
  document.getElementById('status').innerText='Done';
