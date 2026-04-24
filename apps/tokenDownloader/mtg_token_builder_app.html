@@ -10,7 +10,7 @@
 body { font-family: Arial; margin:0; display:flex; height:100vh; }
 #main { flex:3; padding:10px; overflow:auto; }
 #sidebar { flex:1; border-left:1px solid #ccc; padding:10px; overflow:auto; }
-.token { display:inline-block; margin:5px; cursor:pointer; }
+.token { display:inline-block; margin:5px; cursor:pointer; text-align:center; width:130px; }
 img { width:120px; }
 .controls { margin-bottom:10px; }
 .progress { height:10px; background:#eee; margin-top:10px; }
@@ -57,16 +57,49 @@ function getImageUrl(card){if(card.image_uris)return card.image_uris.border_crop
 
 async function fetchTokens(q){let url=`https://api.scryfall.com/cards/search?q=${encodeURIComponent(q)}`;let res=[];while(url){const r=await fetch(url);const d=await r.json();res.push(...d.data);url=d.next_page;}return res}
 
-async function searchTokens(){const q=document.getElementById('search').value;const tokens=await fetchTokens(q+' t:token');allTokensCache=tokens;display(tokens)}
-async function getAllTokens(){const tokens=await fetchTokens('t:token');allTokensCache=tokens;display(tokens)}
+async function searchTokens(){const q=document.getElementById('search').value;const tokens=await fetchTokens(q+' t:token');allTokensCache=tokens;displayGrouped(tokens)}
+async function getAllTokens(){const tokens=await fetchTokens('t:token');allTokensCache=tokens;displayGrouped(tokens)}
 
-function display(tokens){const f=document.getElementById('colorFilter').value;const container=document.getElementById('results');container.innerHTML='';tokens.filter(c=>!f||colorCode(c.colors)===f).forEach(card=>{
-const url=getImageUrl(card); if(!url)return;
-const d=document.createElement('div'); d.className='token';
-d.innerHTML=`<img src="${url}"><small>${card.name}</small>`;
-d.onclick=()=>addToCart(card);
-container.appendChild(d);
-})}
+function groupByName(tokens){const map={};
+ tokens.forEach(c=>{
+   const key=c.name;
+   if(!map[key]) map[key]=[];
+   map[key].push(c);
+ });
+ return map;
+}
+
+function displayGrouped(tokens){const grouped=groupByName(tokens);
+ const f=document.getElementById('colorFilter').value;
+ const container=document.getElementById('results');
+ container.innerHTML='';
+
+ Object.entries(grouped).forEach(([name, variants])=>{
+   const card=variants[0];
+   if(f && colorCode(card.colors)!==f) return;
+   const url=getImageUrl(card);
+   if(!url) return;
+
+   const d=document.createElement('div');
+   d.className='token';
+   d.innerHTML=`<img src="${url}"><div>${name}</div>`;
+   d.onclick=()=>showVariants(name, variants);
+   container.appendChild(d);
+ });
+}
+
+function showVariants(name, variants){const container=document.getElementById('results');
+ container.innerHTML=`<h2>${name} variants</h2>`;
+ variants.forEach(card=>{
+   const url=getImageUrl(card);
+   if(!url) return;
+   const d=document.createElement('div');
+   d.className='token';
+   d.innerHTML=`<img src="${url}"><div>${card.set_name || ''}</div>`;
+   d.onclick=()=>addToCart(card);
+   container.appendChild(d);
+ });
+}
 
 function addToCart(c){cart.push(c);renderCart()}
 function renderCart(){const el=document.getElementById('cart');el.innerHTML='';cart.forEach(c=>{const d=document.createElement('div');d.innerText=c.name;el.appendChild(d)})}
