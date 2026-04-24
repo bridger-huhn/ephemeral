@@ -125,25 +125,57 @@ async function processCards(cards){
  }
 
  async function handle(card){
-  const url=getImageUrl(card); if(!url) return;
-  const res=await fetch(url); const blob=await res.blob();
-  const img=await createImageBitmap(blob);
-  const canvas=document.createElement('canvas'); canvas.width=320; canvas.height=480;
-  canvas.getContext('2d').drawImage(img,0,0,320,480);
+  const url=getImageUrl(card);
+  if(!url){ console.warn('no image url', card.name); return; }
 
-  const base=buildBaseName(card);
-  nameCounts[base]=(nameCounts[base]||0)+1;
-  const filename=`${base}_${nameCounts[base]}.png`;
+  try{
+    const res=await fetch(url);
+    if(!res.ok){ console.error('fetch failed', url); return; }
 
-  const fileBlob=await new Promise(r=>canvas.toBlob(r,'image/png'));
-  if(fileBlob) zip.file(filename,fileBlob);
+    const blob=await res.blob();
 
-  const parts=filename.replace('.png','').split('_');
-  const version=parts.pop(); const color=parts.pop();
-  let power='token',tough='token',name;
-  if(parts[parts.length-1]==='token') name=parts.slice(0,-1).join('_');
-  else{ tough=parts.pop(); power=parts.pop(); name=parts.join('_'); }
-  index.push(`${filename},${name},${power},${tough},${color},${version}`);
+    const img=await createImageBitmap(blob);
+    const canvas=document.createElement('canvas');
+    canvas.width=320;
+    canvas.height=480;
+
+    const ctx=canvas.getContext('2d');
+    ctx.drawImage(img,0,0,320,480);
+
+    const base=buildBaseName(card);
+    nameCounts[base]=(nameCounts[base]||0)+1;
+    const filename=`${base}_${nameCounts[base]}.png`;
+
+    const fileBlob=await new Promise((resolve,reject)=>{
+      canvas.toBlob(b=>{
+        if(b) resolve(b);
+        else reject('toBlob failed');
+      },'image/png');
+    }).catch(e=>{ console.error(e); return null; });
+
+    if(!fileBlob) return;
+
+    zip.file(filename,fileBlob);
+
+    const parts=filename.replace('.png','').split('_');
+    const version=parts.pop();
+    const color=parts.pop();
+
+    let power='token',tough='token',name;
+    if(parts[parts.length-1]==='token'){
+      name=parts.slice(0,-1).join('_');
+    }else{
+      tough=parts.pop();
+      power=parts.pop();
+      name=parts.join('_');
+    }
+
+    index.push(`${filename},${name},${power},${tough},${color},${version}`);
+
+  }catch(e){
+    console.error('handle failed', card.name, e);
+  }
+}(`${filename},${name},${power},${tough},${color},${version}`);
  }
 
  const queue=[...cards];
