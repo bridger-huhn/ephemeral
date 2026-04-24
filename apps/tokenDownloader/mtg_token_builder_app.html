@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Token Builder Pro</title>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+<style>
+body { font-family: Arial; margin:0; display:flex; height:100vh; }
+#main { flex:3; padding:10px; overflow:auto; }
+#sidebar { flex:1; border-left:1px solid #ccc; padding:10px; overflow:auto; }
+.token { display:inline-block; margin:5px; cursor:pointer; }
+img { width:120px; }
+.controls { margin-bottom:10px; }
+.progress { height:10px; background:#eee; margin-top:10px; }
+.progress-bar { height:10px; background:#4caf50; width:0%; }
+</style>
+</head>
+<body>
+<div id="main">
+<div class="controls">
+<input id="search" placeholder="Search tokens...">
+<button onclick="searchTokens()">Search</button>
+<button onclick="getAllTokens()">Get All Tokens</button>
+<select id="colorFilter">
+<option value="">All Colors</option>
+<option value="w">White</option>
+<option value="u">Blue</option>
+<option value="b">Black</option>
+<option value="r">Red</option>
+<option value="g">Green</option>
+<option value="c">Colorless</option>
+</select>
+</div>
+<div id="results"></div>
+<div class="progress"><div id="bar" class="progress-bar"></div></div>
+</div>
+
+<div id="sidebar">
+<h3>Cart</h3>
+<div id="cart"></div>
+<button onclick="saveCart()">Save Cart</button>
+<button onclick="loadCart()">Load Cart</button>
+<button onclick="downloadCart()">Download Cart</button>
+<button onclick="downloadAllTokens()">Download ALL (throttled)</button>
+</div>
+
+<script>
+let cart=[]; let nameCounts={}; let allTokensCache=[];
+const CONCURRENT=5;
+
+function clean(t){return t?t.replace(/[^\w\s-]/g,'').replace(/ /g,'_').toLowerCase():'token'}
+function colorCode(c){return c&&c.length?c.join('').toLowerCase():'c'}
+function buildBaseName(card){const name=clean(card.name);const p=card.power;const t=card.toughness;const pt=p&&t?`${clean(p)}_${clean(t)}`:'token';const col=colorCode(card.colors);return `${name}_${pt}_${col}`}
+function getImageUrl(card){if(card.image_uris)return card.image_uris.border_crop||card.image_uris.png;if(card.card_faces){for(const f of card.card_faces){if(f.image_uris)return f.image_uris.border_crop||f.image_uris.png}}return null}
+
+async function fetchTokens(q){let url=`https://api.scryfall.com/cards/search?q=${encodeURIComponent(q)}`;let res=[];while(url){const r=await fetch(url);const d=await r.json();res.push(...d.data);url=d.next_page;}return res}
+
+async function searchTokens(){const q=document.getElementById('search').value;const tokens=await fetchTokens(q+' t:token');allTokensCache=tokens;display(tokens)}
+async function getAllTokens(){const tokens=await fetchTokens('t:token');allTokensCache=tokens;display(tokens)}
+
+function display(tokens){const f=document.getElementById('colorFilter').value;const container=document.getElementById('results');container.innerHTML='';tokens.filter(c=>!f||colorCode(c.colors)===f).forEach(card=>{
+const url=getImageUrl(card); if(!url)return;
+const d=document.createElement('div'); d.className='token';
+d.innerHTML=`<img src="${url}"><small>${card.name}</small>`;
+d.onclick=()=>addToCart(card);
+container.appendChild(d);
+})}
+
+function addToCart(c){cart.push(c);renderCart()}
+function renderCart(){const el=document.getElementById('cart');el.innerHTML='';cart.forEach(c=>{const d=document.createElement('div');d.innerText=c.name;el.appendChild(d)})}
+
+function saveCart(){localStorage.setItem('cart',JSON.stringify(cart))}
+function loadCart(){cart=JSON.parse(localStorage.getItem('cart')||'[]');renderCart()}
+
+async function processCards(cards){const zip=new JSZip(); let index=[]; let done=0;
+
+async function worker(queue){while(queue.length){const card=queue.shift(); await handle(card); done++; updateBar(done/cards.length)}}
+
+async function handle(card){const url=getImageUrl(card); if(!url)return;
+const res=await fetch(url); const blob=await res.blob();
+const img=await createImageBitmap(blob);
+const canvas=document.createElement('canvas'); canvas.width=320; canvas.height=480;
+canvas.getContext('2d').drawImage(img,0,0,320,480);
+
+const base=buildBaseName(card);
+nameCounts[base]=(nameCounts[base]||0)+1;
+const filename=`${base}_${nameCounts[base]}.png`;
+const fileBlob=await new Promise(r=>canvas.toBlob(r));
+zip.file(filename,fileBlob);
+
+const parts=filename.replace('.png','').split('_');
+const version=parts.pop(); const color=parts.pop();
+let power='token',tough='token',name;
+if(parts[parts.length-1]==='token'){name=parts.slice(0,-1).join('_');}
+else{tough=parts.pop(); power=parts.pop(); name=parts.join('_');}
+index.push(`${filename},${name},${power},${tough},${color},${version}`);
+}
+
+const queue=[...cards];
+const workers=[];
+for(let i=0;i<CONCURRENT;i++)workers.push(worker(queue));
+await Promise.all(workers);
+
+zip.file('index.csv',index.join('\n'));
+const content=await zip.generateAsync({type:'blob'});
+saveAs(content,'tokens.zip');
+}
+
+function updateBar(p){document.getElementById('bar').style.width=(p*100)+'%'}
+
+function downloadCart(){processCards(cart)}
+function downloadAllTokens(){processCards(allTokensCache)}
+</script>
+</body>
+</html>

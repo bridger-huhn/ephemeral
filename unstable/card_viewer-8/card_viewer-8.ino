@@ -100,10 +100,11 @@ String searchVersion = "";
 bool showingCard     = false;
 bool inFavoritesMode = false;
 
-// Favorites menu — no heap, just three small variables.
-bool showFavMenu   = false;
-int  favMenuScroll = 0;
-int  favMenuTotal  = 0;
+// Favorites menu
+bool  showFavMenu   = false;
+float favScrollPx   = 0;   // pixel scroll offset (smooth)
+float favScrollVel  = 0;   // momentum velocity (px/frame)
+int   favMenuTotal  = 0;
 
 
 // KEY OPTIMISATION: fav status cached as a single bool.
@@ -122,6 +123,9 @@ String pendingName;
 
 std::vector<String> matches;
 std::vector<String> matchVersions;   // version in search mode; card name in fav-browse mode
+std::vector<String> matchNames;      // card name from index (col 1) — search mode only
+std::vector<String> favCache;        // display names cached at menu open — no SD per frame
+std::vector<String> favPaths;        // file paths cached at menu open (parallel to favCache)
 
 
 int  matchIndex     = 0;
@@ -261,6 +265,7 @@ void loadFavouritesAsMatches()
 {
   matches.clear();
   matchVersions.clear();
+  matchNames.clear();
   File f = SD.open(FAVORITES_FILE);
   if (!f) return;
   while (f.available()) {
@@ -288,9 +293,9 @@ bool inPTDecBox(int x,int y) { return x>=PT_DEC_X && x<PT_DEC_X+PT_W && y>=PT_DE
 int favMenuRowAt(int x, int y)
 {
   if (y < FAV_MENU_Y0 || y >= FAV_MENU_Y1) return -1;
-  int row = (y - FAV_MENU_Y0) / FAV_ROW_H;
-  int idx = favMenuScroll + row;
-  return (idx < favMenuTotal) ? idx : -1;
+  int absY = (int)favScrollPx + (y - FAV_MENU_Y0);
+  int idx  = absY / FAV_ROW_H;
+  return (idx >= 0 && idx < favMenuTotal) ? idx : -1;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -298,63 +303,97 @@ int favMenuRowAt(int x, int y)
 // ─────────────────────────────────────────────────────────────────────────────
 void drawFavMenu()
 {
-  tft.fillScreen(TFT_BLACK);
-  uint16_t gold = tft.color565(255, 200, 0);
+  uint16_t gold   = tft.color565(255, 200, 0);
+  uint16_t redX   = tft.color565(200, 50, 50);
 
+  int   maxRows = (FAV_MENU_Y1 - FAV_MENU_Y0) / FAV_ROW_H;
+  float maxPx   = (float)max(0, favMenuTotal - maxRows) * FAV_ROW_H;
+
+  // ── Scrollable rows ───────────────────────────────────────────────────────
+  // Each row fills its own background — NO fillScreen, so no black-flash flicker.
+  int lastY = FAV_MENU_Y0;
+
+  if (favMenuTotal == 0) {
+    tft.fillRect(0, FAV_MENU_Y0, 320, FAV_MENU_Y1 - FAV_MENU_Y0, TFT_BLACK);
+    tft.setTextColor(TFT_DARKGREY);
+    tft.drawString("No favourites saved yet.", 20, 220, 2);
+  } else {
+    for (int i = 0; i < (int)favCache.size(); i++) {
+      int ry = FAV_MENU_Y0 + i * FAV_ROW_H - (int)favScrollPx;
+      if (ry + FAV_ROW_H <= FAV_MENU_Y0) continue;
+      if (ry >= FAV_MENU_Y1)             break;
+
+      uint16_t bg = (i % 2 == 0) ? tft.color565(12,12,22) : tft.color565(22,22,38);
+      int clipY = max(ry, FAV_MENU_Y0);
+      int clipH = min(ry + FAV_ROW_H, FAV_MENU_Y1) - clipY;
+      tft.fillRect(0, clipY, 320, clipH, bg);
+      lastY = clipY + clipH;
+
+      // Text + X only for fully-visible rows
+      if (ry >= FAV_MENU_Y0 && ry + FAV_ROW_H <= FAV_MENU_Y1) {
+        int ty = ry + (FAV_ROW_H - 14) / 2;
+        tft.setTextColor(TFT_WHITE, bg);
+        tft.drawString(favCache[i], 10, ty, 2);
+
+        // Red X button (right edge)
+        int cx = 302, cy = ry + FAV_ROW_H / 2;
+        tft.fillCircle(cx, cy, 12, redX);
+        tft.setTextColor(TFT_WHITE);         // transparent bg so circle shows through
+        tft.drawString("X", cx - 4, cy - 7, 2);
+      }
+    }
+    // Fill any gap between last row and footer
+    if (lastY < FAV_MENU_Y1)
+      tft.fillRect(0, lastY, 320, FAV_MENU_Y1 - lastY, TFT_BLACK);
+  }
+
+  // ── Header overdraw (masks row bleed and repaints title) ─────────────────
+  tft.fillRect(0, 0, 320, FAV_MENU_Y0, TFT_BLACK);
   tft.setTextColor(gold, TFT_BLACK);
   tft.drawString("Favourites", 10, 6, 4);
   drawStar(298, 20, KB_FAV_OR, KB_FAV_IR, gold, true);
-
   char cnt[20]; sprintf(cnt, "%d saved", favMenuTotal);
   tft.setTextColor(tft.color565(150, 140, 70), TFT_BLACK);
   tft.drawString(cnt, 12, 34, 2);
   tft.drawFastHLine(0, FAV_MENU_Y0-2, 320, tft.color565(80,70,20));
 
-  if (favMenuTotal == 0) {
-    tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    tft.drawString("No favourites saved yet.", 20, 220, 2);
-    tft.drawString("hold: back", 100, 463, 2);
-    return;
-  }
-
-  int maxRows = (FAV_MENU_Y1 - FAV_MENU_Y0) / FAV_ROW_H;
-  File f = SD.open(FAVORITES_FILE);
-  int lineIdx = 0, rowsDrawn = 0;
-  while (f.available() && rowsDrawn < maxRows) {
-    String line = f.readStringUntil('\n');
-    line.trim();
-    if (line.length() == 0) continue;
-    if (lineIdx++ < favMenuScroll) continue;
-
-    int comma = line.indexOf(',');
-    String dname = (comma > 0) ? line.substring(comma+1) : line;
-    while (dname.length() > 1 && tft.textWidth(dname,2) > 292) dname.remove(dname.length()-1);
-
-    int ry  = FAV_MENU_Y0 + rowsDrawn * FAV_ROW_H;
-    uint16_t bg = (rowsDrawn%2==0) ? tft.color565(12,12,22) : tft.color565(22,22,38);
-    tft.fillRect(0, ry, 320, FAV_ROW_H-1, bg);
-    tft.setTextColor(TFT_WHITE, bg);
-    tft.drawString(dname, 10, ry+(FAV_ROW_H-14)/2, 2);
-    tft.setTextColor(tft.color565(80,80,100), bg);
-    tft.drawString(">", 308, ry+(FAV_ROW_H-14)/2, 2);
-    rowsDrawn++;
-  }
-  f.close();
-
+  // ── Footer overdraw ───────────────────────────────────────────────────────
+  tft.fillRect(0, FAV_MENU_Y1, 320, 480 - FAV_MENU_Y1, TFT_BLACK);
   tft.setTextColor(gold, TFT_BLACK);
-  if (favMenuScroll > 0)                         tft.drawString("^", 154, FAV_MENU_Y0-16, 2);
-  if (favMenuScroll + maxRows < favMenuTotal)     tft.drawString("v", 154, FAV_MENU_Y1+3,  2);
+  if (favScrollPx > 0.5f)        tft.drawString("^", 154, FAV_MENU_Y0-16, 2);
+  if (favScrollPx < maxPx-0.5f)  tft.drawString("v", 154, FAV_MENU_Y1+3,  2);
   tft.drawFastHLine(0, FAV_MENU_Y1, 320, tft.color565(80,70,20));
   tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  tft.drawString("swipe: scroll   hold: back", 18, 463, 2);
+  tft.drawString(favMenuTotal==0 ? "hold: back" : "swipe: scroll   hold: back", 18, 463, 2);
 }
 
 void openFavMenu()
 {
-  showFavMenu   = true;
-  showingCard   = false;
-  favMenuScroll = 0;
-  favMenuTotal  = countFavorites();
+  showFavMenu  = true;
+  showingCard  = false;
+  favScrollPx  = 0;
+  favScrollVel = 0;
+  favMenuTotal = countFavorites();
+
+  // Cache display names + paths so drawFavMenu() needs zero SD I/O per frame.
+  favCache.clear();
+  favPaths.clear();
+  File f = SD.open(FAVORITES_FILE);
+  if (f) {
+    while (f.available()) {
+      String line = f.readStringUntil('\n');
+      line.trim();
+      if (line.length() == 0) continue;
+      int comma = line.indexOf(',');
+      String path  = (comma > 0) ? line.substring(0, comma) : line;
+      String dname = (comma > 0) ? line.substring(comma+1)  : line;
+      while (dname.length() > 1 && tft.textWidth(dname,2) > 258) dname.remove(dname.length()-1);
+      favPaths.push_back(path);
+      favCache.push_back(dname);
+    }
+    f.close();
+  }
+
   drawFavMenu();
 }
 
@@ -373,9 +412,45 @@ void openFavouritesFromMenu(int targetIdx)
   showCardAt((targetIdx < (int)matches.size()) ? targetIdx : 0);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// KEYBOARD
-// ─────────────────────────────────────────────────────────────────────────────
+// Delete a favourite by its menu index — rewrites SD, updates caches in-place.
+void deleteFavAt(int idx)
+{
+  if (idx < 0 || idx >= (int)favPaths.size()) return;
+  String pathToRemove = favPaths[idx];
+
+  // Rewrite the file without this entry
+  std::vector<String> kept;
+  File f = SD.open(FAVORITES_FILE);
+  if (f) {
+    while (f.available()) {
+      String line = f.readStringUntil('\n'); line.trim();
+      if (line.length() == 0) continue;
+      int c = line.indexOf(',');
+      String p = (c > 0) ? line.substring(0, c) : line;
+      if (p != pathToRemove) kept.push_back(line);
+    }
+    f.close();
+  }
+  SD.remove(FAVORITES_FILE);
+  File out = SD.open(FAVORITES_FILE, FILE_WRITE);
+  if (out) { for (auto &l : kept) out.println(l); out.close(); }
+
+  // Update in-memory caches (no re-open needed)
+  favPaths.erase(favPaths.begin() + idx);
+  favCache.erase(favCache.begin() + idx);
+  favMenuTotal--;
+  favScrollVel = 0;
+
+  // Clamp scroll so we don't land past the new end
+  int maxRows = (FAV_MENU_Y1 - FAV_MENU_Y0) / FAV_ROW_H;
+  float maxPx = (float)max(0, favMenuTotal - maxRows) * FAV_ROW_H;
+  if (favScrollPx > maxPx) favScrollPx = maxPx;
+
+  drawFavMenu();
+  Serial.printf("Deleted favourite: %s\n", pathToRemove.c_str());
+}
+
+
 void drawKey(int row,int col,bool pressed)
 {
   int x = col * KEY_W;
@@ -611,7 +686,7 @@ bool indexLineMatches(const String &line)
 
 void buildMatchesFromIndex()
 {
-  matches.clear(); matchVersions.clear();
+  matches.clear(); matchVersions.clear(); matchNames.clear();
   File idx=SD.open("/index.csv");
   if (!idx) { tft.fillScreen(TFT_BLACK); tft.setTextColor(TFT_RED); tft.drawString("No index.csv!",20,180,4); return; }
   String line="";
@@ -625,6 +700,8 @@ void buildMatchesFromIndex()
           matches.push_back(line.substring(0,c1));
           int c2=line.indexOf(',',c1+1),c3=line.indexOf(',',c2+1),
               c4=line.indexOf(',',c3+1),c5=line.indexOf(',',c4+1);
+          String cardName=(c2>0)?line.substring(c1+1,c2):""; cardName.trim();
+          matchNames.push_back(cardName);
           String ver=(c5>0)?line.substring(c5+1):""; ver.trim();
           matchVersions.push_back(ver);
         }
@@ -639,6 +716,8 @@ void buildMatchesFromIndex()
       matches.push_back(line.substring(0,c1));
       int c2=line.indexOf(',',c1+1),c3=line.indexOf(',',c2+1),
           c4=line.indexOf(',',c3+1),c5=line.indexOf(',',c4+1);
+      String cardName=(c2>0)?line.substring(c1+1,c2):""; cardName.trim();
+      matchNames.push_back(cardName);
       String ver=(c5>0)?line.substring(c5+1):""; ver.trim();
       matchVersions.push_back(ver);
     }
@@ -773,9 +852,16 @@ void loop()
           // ── Star tap: toggle favourite, redraw star instantly (no PNG reload) ──
           else if (inStarButton(touchStartX,touchStartY))
           {
-            String cardName = (matchIndex < (int)matchVersions.size() && matchVersions[matchIndex].length()>0)
-                   ? matchVersions[matchIndex]
-                   : matches[matchIndex];
+            // Use the real card name — matchNames[] in search mode,
+            // matchVersions[] (already the name) in fav-browse mode.
+            String cardName;
+            if (inFavoritesMode) {
+              cardName = (matchIndex < (int)matchVersions.size() && matchVersions[matchIndex].length()>0)
+                       ? matchVersions[matchIndex] : matches[matchIndex];
+            } else {
+              cardName = (matchIndex < (int)matchNames.size() && matchNames[matchIndex].length()>0)
+                       ? matchNames[matchIndex] : matches[matchIndex];
+            }
 
             // instant UI
             currentCardIsFav = !currentCardIsFav;
@@ -806,13 +892,19 @@ void loop()
         }
         else if (abs(dy)>=SWIPE_THRESHOLD&&abs(dy)>abs(dx))
         {
-          if (dy<0){if(favMenuScroll+maxRows<favMenuTotal){favMenuScroll++;drawFavMenu();}}
-          else     {if(favMenuScroll>0){favMenuScroll--;drawFavMenu();}}
+          int maxRows=(FAV_MENU_Y1-FAV_MENU_Y0)/FAV_ROW_H;
+          float maxPx=(float)max(0,favMenuTotal-maxRows)*FAV_ROW_H;
+          favScrollPx  = constrain(favScrollPx - dy, 0.0f, maxPx);
+          favScrollVel = (float)(-dy) / (float)max(1UL,held) * 30.0f;
+          drawFavMenu();
         }
         else
         {
           int idx=favMenuRowAt(touchStartX,touchStartY);
-          if (idx>=0) openFavouritesFromMenu(idx);
+          if (idx>=0) {
+            if (touchStartX >= 282) deleteFavAt(idx);   // red X zone
+            else                    openFavouritesFromMenu(idx);
+          }
         }
       }
 
@@ -837,6 +929,16 @@ void loop()
       }
     }
   }
+  // ── Smooth-scroll momentum for favourites menu ──
+  if (showFavMenu && fabsf(favScrollVel) > 0.3f) {
+    int maxRows = (FAV_MENU_Y1 - FAV_MENU_Y0) / FAV_ROW_H;
+    float maxPx = (float)max(0, favMenuTotal - maxRows) * FAV_ROW_H;
+    favScrollPx  = constrain(favScrollPx + favScrollVel, 0.0f, maxPx);
+    favScrollVel *= 0.82f;  // friction: ~8 frames to stop
+    if (favScrollPx <= 0 || favScrollPx >= maxPx) favScrollVel = 0;
+    drawFavMenu();
+  }
+
   // ── Deferred favourite save ──
   if (pendingFavSave) {
     pendingFavSave = false;
