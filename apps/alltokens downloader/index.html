@@ -263,7 +263,7 @@ button:disabled { background: #3a2a66; cursor: default; opacity: 0.7; }
     <h2>✦ How to Use Mimic Token Downloader</h2>
     <ul>
       <li><strong>Paste your decklist</strong> into the text box. Most formats work — MTGO, Moxfield, plain card names, quantities optional.</li>
-      <li>Click <strong>Analyze Deck</strong> to fetch all tokens your deck can produce.</li>
+      <li>Click <strong>Get Tokens From Decklist</strong> to fetch all tokens your deck can produce.</li>
       <li><strong>Click an image</strong> to select which art version of each token you want. A purple outline shows your selection.</li>
       <li>If a token art has multiple set printings, an <strong>Alt Prints</strong> button appears beneath it. Click it to expand and choose a specific printing.</li>
       <li>Use <strong>Load More</strong> under any token group to reveal additional unique artworks beyond the first batch.</li>
@@ -298,7 +298,7 @@ button:disabled { background: #3a2a66; cursor: default; opacity: 0.7; }
     <textarea id="deck" rows="8" placeholder="Paste your decklist here..."></textarea>
     <input id="zipname" placeholder="Deck Name (optional)" />
 
-    <button onclick="analyze()">Analyze Deck</button>
+    <button onclick="analyze()">Get Tokens From Decklist</button>
     <button onclick="download()">Download Selected Tokens</button>
 
     <div id="picker"></div>
@@ -424,7 +424,29 @@ async function findTokens(names) {
 
 // ── EXPAND TOKEN GROUP ───────────────────
 
+function isCopyToken(token) {
+  // Copy tokens have no meaningful identity — no P/T and no subtype.
+  // Expanding them would produce a query so broad it matches all tokens.
+  const hasSubtype = token.type_line.includes("—");
+  const hasPT = token.power != null && token.toughness != null;
+  const nameIsCopy = /copy/i.test(token.name);
+  return nameIsCopy || (!hasSubtype && !hasPT);
+}
+
 async function expandTokenGroup(exampleToken) {
+  // For copy tokens or anything too vague to query meaningfully,
+  // just return the single token with no expansion.
+  if (isCopyToken(exampleToken)) {
+    const illId = exampleToken.illustration_id || exampleToken.image_uris?.small;
+    const printings = new Map([[illId, [exampleToken]]]);
+    return {
+      tokens: exampleToken.image_uris?.small ? [exampleToken] : [],
+      nextPage: null,
+      seenIllustrations: new Set([illId]),
+      illustrationPrintings: printings
+    };
+  }
+
   const queryParts = ["t:token"];
 
   if (exampleToken.power && exampleToken.toughness) {
@@ -441,6 +463,18 @@ async function expandTokenGroup(exampleToken) {
   const subtype = exampleToken.type_line.split("—")[1];
   if (subtype) {
     subtype.trim().split(/\s+/).forEach(word => queryParts.push(`t:${word}`));
+  }
+
+  // Safety net: if we still only have t:token with no other filters, don't expand
+  if (queryParts.length === 1) {
+    const illId = exampleToken.illustration_id || exampleToken.image_uris?.small;
+    const printings = new Map([[illId, [exampleToken]]]);
+    return {
+      tokens: exampleToken.image_uris?.small ? [exampleToken] : [],
+      nextPage: null,
+      seenIllustrations: new Set([illId]),
+      illustrationPrintings: printings
+    };
   }
 
   let url = `https://api.scryfall.com/cards/search?unique=prints&order=released&dir=desc&q=${encodeURIComponent(queryParts.join(" "))}`;
