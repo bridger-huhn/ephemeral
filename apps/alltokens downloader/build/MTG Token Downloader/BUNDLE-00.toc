@@ -1,0 +1,4 @@
+([('MTG Token Downloader',
+   '/Users/bridgerhuhn/Documents/Mtg-tokens/ephemeral/apps/alltokens '
+   'downloader/dist/MTG Token Downloader',
+   'EXECUTABLE')],)

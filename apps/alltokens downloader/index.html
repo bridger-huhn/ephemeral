@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mimic Token Downloader</title>
+<style>
+body {
+  margin: 0;
+  font-family: system-ui;
+  background: radial-gradient(circle at top, #160e2a, #0a0612);
+  color: white;
+}
+
+.container {
+  max-width: 1100px;
+  margin: 40px auto;
+  padding: 20px;
+}
+
+h1 {
+  text-align: center;
+  color: #ffc800;
+  text-shadow: 0 0 20px #8c5aff;
+  margin-bottom: 6px;
+}
+
+.top-bar {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.top-bar button {
+  width: auto;
+  padding: 7px 18px;
+  font-size: 13px;
+  margin-top: 0;
+  border-radius: 8px;
+}
+
+.btn-restart { background: #3a2a66; }
+.btn-restart:hover { background: #5a3aaa; }
+
+.btn-help { background: #1a3a5a; }
+.btn-help:hover { background: #2a5a8a; }
+
+.btn-all { background: #5a1a1a; }
+.btn-all:hover { background: #8a2a2a; }
+
+.panel {
+  background: #100c20;
+  padding: 20px;
+  border-radius: 16px;
+  box-shadow: 0 0 30px rgba(140,90,255,0.25);
+}
+
+textarea, input {
+  width: 100%;
+  box-sizing: border-box;
+  border: none;
+  border-radius: 10px;
+  padding: 10px;
+  margin-top: 10px;
+  background: #160e2a;
+  color: white;
+}
+
+button {
+  margin-top: 12px;
+  background: #8c5aff;
+  border: none;
+  padding: 12px;
+  width: 100%;
+  color: white;
+  font-weight: bold;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+button:hover { background: #6a3add; }
+button:disabled { background: #3a2a66; cursor: default; opacity: 0.7; }
+
+.token-group { margin-top: 20px; }
+.token-group h3 { margin-bottom: 8px; color: #c084fc; }
+.token-grid { display: flex; flex-wrap: wrap; }
+.selected { outline: 3px solid #8c5aff; }
+
+.load-more-btn {
+  width: auto;
+  padding: 8px 20px;
+  margin-top: 8px;
+  background: #3a2a66;
+  font-size: 12px;
+}
+.load-more-btn:hover { background: #5a3aaa; }
+
+.token-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 6px;
+}
+.token-card img {
+  width: 120px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: 0.2s;
+  margin: 0;
+}
+.token-card img:hover { transform: scale(1.05); }
+
+.alt-btn {
+  margin-top: 4px;
+  width: 120px;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-weight: normal;
+  background: #2a1a4a;
+  border-radius: 6px;
+}
+.alt-btn:hover { background: #3a2a66; }
+
+.alt-grid {
+  display: none;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 6px;
+  padding: 8px;
+  background: #0d0920;
+  border-radius: 10px;
+  border: 1px solid #3a2a66;
+  width: 100%;
+}
+.alt-grid img {
+  width: 80px;
+  margin: 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: 0.2s;
+  opacity: 0.85;
+}
+.alt-grid img:hover { transform: scale(1.07); opacity: 1; }
+.alt-open .alt-grid { display: flex; }
+.alt-open .alt-btn { background: #5a3aaa; }
+
+.progress {
+  height: 18px;
+  background: #160e2a;
+  border-radius: 10px;
+  overflow: hidden;
+  margin-top: 15px;
+}
+.bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #8c5aff, #c084fc);
+  transition: width 0.2s;
+}
+
+.log {
+  margin-top: 15px;
+  font-family: monospace;
+  font-size: 12px;
+  max-height: 200px;
+  overflow-y: auto;
+  color: #8c82aa;
+}
+
+/* ── MODAL ── */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.75);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+}
+.modal-overlay.open { display: flex; }
+
+.modal {
+  background: #100c20;
+  border: 1px solid #3a2a66;
+  border-radius: 16px;
+  padding: 28px 32px;
+  max-width: 560px;
+  width: 90%;
+  box-shadow: 0 0 40px rgba(140,90,255,0.4);
+  position: relative;
+}
+.modal h2 {
+  color: #ffc800;
+  margin-top: 0;
+  text-shadow: 0 0 12px #8c5aff;
+}
+.modal p, .modal li {
+  color: #c8c0e0;
+  line-height: 1.6;
+  font-size: 14px;
+}
+.modal ul { padding-left: 20px; }
+.modal .warn {
+  background: #2a1a0a;
+  border: 1px solid #8c5a00;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-top: 14px;
+  color: #ffc870;
+  font-size: 13px;
+}
+.modal-close {
+  position: absolute;
+  top: 14px; right: 18px;
+  background: none;
+  border: none;
+  color: #8c82aa;
+  font-size: 22px;
+  cursor: pointer;
+  padding: 0;
+  margin: 0;
+  width: auto;
+  line-height: 1;
+}
+.modal-close:hover { color: white; background: none; }
+
+/* ── CONFIRM BOX ── */
+.confirm-box {
+  display: none;
+  background: #1a0f30;
+  border: 1px solid #8c5aff;
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #c8c0e0;
+}
+.confirm-box.open { display: block; }
+.confirm-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+.confirm-row button {
+  margin: 0;
+  padding: 9px 0;
+  font-size: 13px;
+  flex: 1;
+}
+.btn-confirm-yes { background: #8a2a2a; }
+.btn-confirm-yes:hover { background: #b03030; }
+.btn-confirm-no { background: #3a2a66; }
+.btn-confirm-no:hover { background: #5a3aaa; }
+</style>
+</head>
+<body>
+
+<!-- ── HELP MODAL ── -->
+<div class="modal-overlay" id="helpModal" onclick="closeHelp(event)">
+  <div class="modal">
+    <button class="modal-close" onclick="closeHelpBtn()">✕</button>
+    <h2>✦ How to Use Mimic Token Downloader</h2>
+    <ul>
+      <li><strong>Paste your decklist</strong> into the text box. Most formats work — MTGO, Moxfield, plain card names, quantities optional.</li>
+      <li>Click <strong>Analyze Deck</strong> to fetch all tokens your deck can produce.</li>
+      <li><strong>Click an image</strong> to select which art version of each token you want. A purple outline shows your selection.</li>
+      <li>If a token art has multiple set printings, an <strong>Alt Prints</strong> button appears beneath it. Click it to expand and choose a specific printing.</li>
+      <li>Use <strong>Load More</strong> under any token group to reveal additional unique artworks beyond the first batch.</li>
+      <li>Optionally name your ZIP in the <strong>Deck Name</strong> field, then click <strong>Download Selected Tokens</strong>.</li>
+      <li>Each token downloads as a <strong>320×480 RGB565 .bin file</strong> — ready for Mimic devices.</li>
+      <li>Use <strong>↺ Restart</strong> to clear everything and start fresh.</li>
+    </ul>
+    <div class="warn">
+      ⚠️ <strong>Download All MTG Tokens</strong> fetches every unique token artwork in Magic's history. This may take several minutes and produce a very large ZIP. Use with care!
+    </div>
+  </div>
+</div>
+
+<div class="container">
+  <h1>✦ Mimic Token Downloader ✦</h1>
+
+  <div class="top-bar">
+    <button class="btn-restart" onclick="restart()">↺ Restart</button>
+    <button class="btn-help" onclick="openHelp()">? Help</button>
+    <button class="btn-all" onclick="toggleConfirm()">⬇ Download All MTG Tokens</button>
+  </div>
+
+  <div class="confirm-box" id="confirmBox">
+    ⚠️ This will fetch <strong>every unique token artwork</strong> ever printed in Magic: The Gathering and package them into a ZIP. It may take <strong>several minutes</strong> and produce a very large file. Are you sure?
+    <div class="confirm-row">
+      <button class="btn-confirm-yes" onclick="downloadAllTokens()">Yes, download everything</button>
+      <button class="btn-confirm-no" onclick="toggleConfirm()">Cancel</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <textarea id="deck" rows="8" placeholder="Paste your decklist here..."></textarea>
+    <input id="zipname" placeholder="Deck Name (optional)" />
+
+    <button onclick="analyze()">Analyze Deck</button>
+    <button onclick="download()">Download Selected Tokens</button>
+
+    <div id="picker"></div>
+
+    <div class="progress"><div class="bar" id="bar"></div></div>
+    <div class="log" id="log"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.7.29/dist/zip.min.js"></script>
+<script>
+const WIDTH = 320;
+const HEIGHT = 480;
+
+let tokenGroups = {};
+let selectedTokens = {};
+
+// ── LOGGING ──────────────────────────────
+
+function log(msg) {
+  const el = document.getElementById("log");
+  el.innerHTML += msg + "<br>";
+  el.scrollTop = el.scrollHeight;
+}
+
+function clearLog() {
+  document.getElementById("log").innerHTML = "";
+}
+
+function setBar(pct) {
+  document.getElementById("bar").style.width = pct + "%";
+}
+
+// ── HELP MODAL ───────────────────────────
+
+function openHelp() {
+  document.getElementById("helpModal").classList.add("open");
+}
+
+function closeHelpBtn() {
+  document.getElementById("helpModal").classList.remove("open");
+}
+
+function closeHelp(e) {
+  if (e.target === document.getElementById("helpModal")) closeHelpBtn();
+}
+
+// ── CONFIRM BOX ──────────────────────────
+
+function toggleConfirm() {
+  document.getElementById("confirmBox").classList.toggle("open");
+}
+
+// ── RESTART ──────────────────────────────
+
+function restart() {
+  document.getElementById("deck").value = "";
+  document.getElementById("zipname").value = "";
+  document.getElementById("picker").innerHTML = "";
+  document.getElementById("confirmBox").classList.remove("open");
+  tokenGroups = {};
+  selectedTokens = {};
+  clearLog();
+  setBar(0);
+}
+
+// ── ANALYZE ──────────────────────────────
+
+async function analyze() {
+  const text = document.getElementById("deck").value.trim();
+  if (!text) return log("Paste a decklist first.");
+
+  document.getElementById("picker").innerHTML = "";
+  tokenGroups = {};
+  selectedTokens = {};
+  clearLog();
+  setBar(0);
+  log("Parsing deck...");
+
+  const names = text.split("\n")
+    .map(l => l.trim())
+    .filter(l => l && !l.startsWith("//"))
+    .map(l => l.replace(/^\d+x?\s+/i, ""));
+
+  log("Fetching cards (batched)...");
+  const tokens = await findTokens(names);
+  log(`Found ${tokens.length} base token type(s)`);
+
+  await groupTokens(tokens);
+  renderPicker();
+  log("Ready — select your token art.");
+}
+
+// ── BATCHED TOKEN FINDER ─────────────────
+
+async function findTokens(names) {
+  const tokens = new Map();
+  const chunks = [];
+  for (let i = 0; i < names.length; i += 75) chunks.push(names.slice(i, i + 75));
+
+  for (const chunk of chunks) {
+    const res = await fetch("https://api.scryfall.com/cards/collection", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifiers: chunk.map(name => ({ name })) })
+    });
+    const data = await res.json();
+
+    for (const card of (data.data || [])) {
+      if (!card.all_parts) continue;
+      for (const part of card.all_parts) {
+        if (part.component === "token") {
+          const tRes = await fetch(part.uri);
+          const tCard = await tRes.json();
+          tokens.set(tCard.id, tCard);
+        }
+      }
+    }
+  }
+
+  return Array.from(tokens.values());
+}
+
+// ── EXPAND TOKEN GROUP ───────────────────
+
+async function expandTokenGroup(exampleToken) {
+  const queryParts = ["t:token"];
+
+  if (exampleToken.power && exampleToken.toughness) {
+    queryParts.push(`pow=${exampleToken.power}`);
+    queryParts.push(`tou=${exampleToken.toughness}`);
+  }
+
+  if (exampleToken.colors?.length) {
+    queryParts.push(`c=${exampleToken.colors.join("")}`);
+  } else if (exampleToken.colors) {
+    queryParts.push(`c=c`);
+  }
+
+  const subtype = exampleToken.type_line.split("—")[1];
+  if (subtype) {
+    subtype.trim().split(/\s+/).forEach(word => queryParts.push(`t:${word}`));
+  }
+
+  let url = `https://api.scryfall.com/cards/search?unique=prints&order=released&dir=desc&q=${encodeURIComponent(queryParts.join(" "))}`;
+
+  const seenIllustrations = new Set();
+  const illustrationPrintings = new Map();
+  const tokens = [];
+  const MAX_PAGES = 5;
+  let page = 0;
+  let nextPage = null;
+
+  while (url && page < MAX_PAGES) {
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (data.data) {
+      for (const t of data.data) {
+        if (!t.image_uris?.small) continue;
+        const illId = t.illustration_id || t.image_uris.small;
+
+        if (!illustrationPrintings.has(illId)) illustrationPrintings.set(illId, []);
+        illustrationPrintings.get(illId).push(t);
+
+        if (!seenIllustrations.has(illId)) {
+          seenIllustrations.add(illId);
+          tokens.push(t);
+        }
+      }
+    }
+
+    nextPage = data.next_page || null;
+    url = nextPage;
+    page++;
+  }
+
+  return { tokens, nextPage, seenIllustrations, illustrationPrintings };
+}
+
+// ── DESCRIBE TOKEN ───────────────────────
+
+function describeToken(card) {
+  const pt = (card.power && card.toughness) ? `${card.power}/${card.toughness}` : "";
+  return `${pt} ${card.type_line}`.trim();
+}
+
+// ── GROUP TOKENS ─────────────────────────
+
+async function groupTokens(tokens) {
+  tokenGroups = {};
+  selectedTokens = {};
+  for (const token of tokens) {
+    const key = describeToken(token);
+    if (!tokenGroups[key]) {
+      log("Expanding: " + key);
+      tokenGroups[key] = await expandTokenGroup(token);
+    }
+  }
+}
+
+// ── RENDER PICKER ────────────────────────
+
+function renderPicker() {
+  const container = document.getElementById("picker");
+  container.innerHTML = "";
+
+  for (const type in tokenGroups) {
+    const div = document.createElement("div");
+    div.className = "token-group";
+    div.innerHTML = `<h3>${type}</h3>`;
+
+    const grid = document.createElement("div");
+    grid.className = "token-grid";
+
+    appendTokenImages(grid, tokenGroups[type].tokens, type);
+    div.appendChild(grid);
+
+    if (tokenGroups[type].nextPage) div.appendChild(makeLoadMoreBtn(grid, type));
+    container.appendChild(div);
+  }
+}
+
+// ── LOAD MORE BUTTON ─────────────────────
+
+function makeLoadMoreBtn(grid, type) {
+  const btn = document.createElement("button");
+  btn.textContent = "Load More";
+  btn.className = "load-more-btn";
+
+  btn.onclick = async () => {
+    btn.textContent = "Loading...";
+    btn.disabled = true;
+
+    const res = await fetch(tokenGroups[type].nextPage);
+    const data = await res.json();
+
+    if (data.data) {
+      const newTokens = [];
+      for (const t of data.data) {
+        if (!t.image_uris?.small) continue;
+        const illId = t.illustration_id || t.image_uris.small;
+
+        if (!tokenGroups[type].illustrationPrintings.has(illId))
+          tokenGroups[type].illustrationPrintings.set(illId, []);
+        tokenGroups[type].illustrationPrintings.get(illId).push(t);
+
+        if (!tokenGroups[type].seenIllustrations.has(illId)) {
+          tokenGroups[type].seenIllustrations.add(illId);
+          newTokens.push(t);
+        }
+      }
+      tokenGroups[type].tokens.push(...newTokens);
+      appendTokenImages(grid, newTokens, type);
+    }
+
+    tokenGroups[type].nextPage = data.next_page || null;
+    if (!tokenGroups[type].nextPage) {
+      btn.remove();
+    } else {
+      btn.textContent = "Load More";
+      btn.disabled = false;
+    }
+  };
+
+  return btn;
+}
+
+// ── APPEND IMAGES ────────────────────────
+
+function appendTokenImages(grid, tokens, type) {
+  const group = tokenGroups[type];
+
+  tokens.forEach(token => {
+    if (!token.image_uris?.small) return;
+
+    const illId = token.illustration_id || token.image_uris.small;
+    const allPrintings = group.illustrationPrintings.get(illId) || [token];
+    const altPrintings = allPrintings.filter(p => p.id !== token.id);
+
+    const card = document.createElement("div");
+    card.className = "token-card";
+
+    const img = document.createElement("img");
+    img.src = token.image_uris.small;
+    img.title = `${token.name} (${token.set_name})`;
+    img.onclick = () => selectToken(type, token, img);
+    card.appendChild(img);
+
+    if (altPrintings.length > 0) {
+      const altBtn = document.createElement("button");
+      altBtn.className = "alt-btn";
+      altBtn.textContent = `Alt Prints (${altPrintings.length})`;
+
+      const altGrid = document.createElement("div");
+      altGrid.className = "alt-grid";
+
+      altPrintings.forEach(alt => {
+        if (!alt.image_uris?.small) return;
+        const altImg = document.createElement("img");
+        altImg.src = alt.image_uris.small;
+        altImg.title = `${alt.name} (${alt.set_name})`;
+        altImg.onclick = () => selectToken(type, alt, altImg);
+        altGrid.appendChild(altImg);
+      });
+
+      altBtn.onclick = () => card.classList.toggle("alt-open");
+      card.appendChild(altBtn);
+      card.appendChild(altGrid);
+    }
+
+    grid.appendChild(card);
+  });
+}
+
+// ── SELECT TOKEN ─────────────────────────
+
+function selectToken(type, token, clickedImg) {
+  selectedTokens[type] = token;
+  document.getElementById("picker").querySelectorAll(".token-group").forEach(g => {
+    if (g.querySelector("h3")?.textContent === type) {
+      g.querySelectorAll("img").forEach(i => i.classList.remove("selected"));
+    }
+  });
+  clickedImg.classList.add("selected");
+}
+
+// ── DOWNLOAD SELECTED ────────────────────
+
+async function download() {
+  const entries = Object.values(selectedTokens);
+  if (!entries.length) return log("Select at least one token first.");
+
+  const zipName = document.getElementById("zipname").value || "tokens";
+  const zipWriter = new zip.ZipWriter(new zip.BlobWriter("application/zip"));
+  let done = 0;
+  setBar(0);
+
+  for (const token of entries) {
+    try {
+      const img = await loadImage(token.image_uris.png);
+      const bin = convertToRGB565(img);
+      await zipWriter.add(
+        token.name.replace(/[^\w]/g, "_") + ".bin",
+        new zip.Uint8ArrayReader(bin)
+      );
+      log(`Packed: ${token.name} (${token.set_name})`);
+    } catch (e) {
+      log("Error on " + token.name + ": " + e);
+    }
+    done++;
+    setBar((done / entries.length) * 100);
+  }
+
+  const blob = await zipWriter.close();
+  triggerDownload(blob, zipName + ".zip");
+  log("Done!");
+}
+
+// ── DOWNLOAD ALL MTG TOKENS ──────────────
+
+async function downloadAllTokens() {
+  document.getElementById("confirmBox").classList.remove("open");
+  clearLog();
+  setBar(0);
+
+  log("Fetching all unique MTG token artworks from Scryfall...");
+  log("This will take a while — please wait.");
+
+  // unique=art gives exactly one result per distinct piece of artwork
+  let url = "https://api.scryfall.com/cards/search?unique=art&order=name&q=t%3Atoken";
+  const allTokens = [];
+
+  while (url) {
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.data) {
+      allTokens.push(...data.data.filter(t => t.image_uris?.png));
+    }
+    url = data.next_page || null;
+    log(`Indexed ${allTokens.length} artworks...`);
+  }
+
+  log(`Total: ${allTokens.length} unique artworks. Converting and zipping...`);
+
+  const zipName = document.getElementById("zipname").value || "all-mtg-tokens";
+  const zipWriter = new zip.ZipWriter(new zip.BlobWriter("application/zip"));
+  const nameCounts = {};
+  let done = 0;
+
+  for (const token of allTokens) {
+    try {
+      const img = await loadImage(token.image_uris.png);
+      const bin = convertToRGB565(img);
+
+      const baseName = token.name.replace(/[^\w]/g, "_");
+      nameCounts[baseName] = (nameCounts[baseName] || 0) + 1;
+      const fileName = nameCounts[baseName] === 1
+        ? `${baseName}.bin`
+        : `${baseName}_${nameCounts[baseName]}.bin`;
+
+      await zipWriter.add(fileName, new zip.Uint8ArrayReader(bin));
+    } catch (e) {
+      log("Skipped: " + (token.name || "unknown") + " — " + e.message);
+    }
+
+    done++;
+    setBar((done / allTokens.length) * 100);
+    if (done % 25 === 0) log(`Progress: ${done} / ${allTokens.length}`);
+  }
+
+  const blob = await zipWriter.close();
+  triggerDownload(blob, zipName + ".zip");
+  log(`✓ Done! ${done} tokens packed.`);
+}
+
+// ── HELPERS ──────────────────────────────
+
+function triggerDownload(blob, filename) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+}
+
+function loadImage(url) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => res(img);
+    img.onerror = rej;
+    img.src = url;
+  });
+}
+
+function convertToRGB565(img) {
+  const canvas = document.createElement("canvas");
+  canvas.width = WIDTH;
+  canvas.height = HEIGHT;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0, WIDTH, HEIGHT);
+  const d = ctx.getImageData(0, 0, WIDTH, HEIGHT).data;
+
+  const out = new Uint8Array(WIDTH * HEIGHT * 2);
+  let j = 0;
+
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i], g = d[i + 1], b = d[i + 2];
+    const w = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+    out[j++] = w >> 8;
+    out[j++] = w & 255;
+  }
+
+  return out;
+}
+</script>
+</body>
+</html>
